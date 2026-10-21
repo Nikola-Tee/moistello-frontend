@@ -1,30 +1,32 @@
 "use client";
 
+import { memo, useMemo } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   PiggyBank,
   CircleDot,
-  ArrowUpCircle,
-  ArrowDownCircle,
+  CircleArrowUp,
+  CircleArrowDown,
   Users,
   Bell,
   Settings,
   Wallet,
-  Sun,
-  Moon,
   BookOpen,
-  HelpCircle,
+  CircleQuestionMark,
   LifeBuoy,
   Vote,
   Gift,
+  Search,
 } from "lucide-react";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { cn } from "@/lib/cn";
 import { Routes } from "@/lib/constants";
+import { isRouteActive } from "@/lib/navigation";
 import { useUIStore } from "@/stores/ui-store";
 import { useAuthStore } from "@/stores/auth-store";
-import { useNotificationStore } from "@/stores/notification-store";
+import { useUnreadCount } from "@/hooks/use-notifications";
 import { useTranslate } from "@/lib/locale/context";
 
 interface NavItem {
@@ -39,23 +41,19 @@ interface NavGroup {
   items: NavItem[];
 }
 
-export function Sidebar() {
+function SidebarComponent() {
   const pathname = usePathname();
-  const theme = useUIStore((s) => s.theme);
-  const toggleTheme = useUIStore((s) => s.toggleTheme);
+  const setCommandPaletteOpen = useUIStore((s) => s.setCommandPaletteOpen);
   const user = useAuthStore((s) => s.user);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  const unreadCount = useNotificationStore((s) => s.unreadCount);
+  const unreadCount = useUnreadCount();
   const { t } = useTranslate();
 
-  const isDark = theme === "dark";
+  const openCommandPalette = () => setCommandPaletteOpen(true);
 
-  const isActive = (href: string) => {
-    if (href === Routes.DASHBOARD) return pathname === Routes.DASHBOARD;
-    return pathname.startsWith(href);
-  };
+  const isActive = (href: string) => isRouteActive(pathname, href);
 
-  const navGroups: NavGroup[] = [
+  const navGroups: NavGroup[] = useMemo(() => [
     {
       title: t("nav.platform"),
       items: [
@@ -68,8 +66,8 @@ export function Sidebar() {
       title: t("nav.community"),
       items: [
         { label: t("nav.communities"), href: Routes.COMMUNITIES, icon: <Users className="h-[18px] w-[18px]" /> },
-        { label: t("nav.contributions"), href: Routes.CONTRIBUTIONS, icon: <ArrowUpCircle className="h-[18px] w-[18px]" /> },
-        { label: t("nav.payouts"), href: Routes.PAYOUTS, icon: <ArrowDownCircle className="h-[18px] w-[18px]" /> },
+        { label: t("nav.contributions"), href: Routes.CONTRIBUTIONS, icon: <CircleArrowUp className="h-[18px] w-[18px]" /> },
+        { label: t("nav.payouts"), href: Routes.PAYOUTS, icon: <CircleArrowDown className="h-[18px] w-[18px]" /> },
         { label: "Governance", href: Routes.GOVERNANCE, icon: <Vote className="h-[18px] w-[18px]" /> },
         { label: "Referrals", href: Routes.REFERRALS, icon: <Gift className="h-[18px] w-[18px]" /> },
       ],
@@ -86,11 +84,11 @@ export function Sidebar() {
       title: t("nav.docs"),
       items: [
         { label: t("nav.documentation"), href: Routes.DOCS, icon: <BookOpen className="h-[18px] w-[18px]" /> },
-        { label: t("nav.faqs"), href: Routes.FAQ, icon: <HelpCircle className="h-[18px] w-[18px]" /> },
+        { label: t("nav.faqs"), href: Routes.FAQ, icon: <CircleQuestionMark className="h-[18px] w-[18px]" /> },
         { label: t("nav.support"), href: Routes.SUPPORT, icon: <LifeBuoy className="h-[18px] w-[18px]" /> },
       ],
     },
-  ];
+  ], [t, unreadCount]);
 
   const userFallback = user?.displayName
     ? user.displayName.charAt(0).toUpperCase()
@@ -111,23 +109,26 @@ export function Sidebar() {
               Moistello
             </span>
           </Link>
-          <button
-            onClick={toggleTheme}
-            className={cn(
-              "inline-flex h-8 w-8 items-center justify-center rounded-xl",
-              "glass-whisper text-muted-foreground",
-            )}
-            aria-label="Toggle theme"
-          >
-            {isDark ? (
-              <Sun className="h-3.5 w-3.5 text-amber-400" />
-            ) : (
-              <Moon className="h-3.5 w-3.5 text-indigo-400" />
-            )}
-          </button>
+          <ThemeToggle size="sm" />
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-2 py-2 scrollbar-none">
+        <nav className="flex-1 overflow-y-auto px-2 py-2 scrollbar-none" aria-label="Dashboard navigation">
+          <button
+            type="button"
+            onClick={openCommandPalette}
+            className={cn(
+              "mb-4 flex w-[calc(100%-1rem)] items-center gap-2 mx-2 rounded-xl px-3 py-2",
+              "text-xs text-muted-foreground hover:text-foreground hover:glass-whisper",
+              "border border-dashed border-white/10 transition-colors",
+            )}
+            aria-label="Open command palette"
+          >
+            <Search className="h-3.5 w-3.5" aria-hidden="true" />
+            <span className="flex-1 text-left">Search…</span>
+            <kbd className="rounded border border-white/10 bg-white/5 px-1 font-mono text-[10px]">
+              ⌘K
+            </kbd>
+          </button>
           {navGroups.map((group) => (
             <div key={group.title} className="mb-5">
               <h3
@@ -145,6 +146,7 @@ export function Sidebar() {
                     <li key={item.href}>
                       <Link
                         href={item.href}
+                         aria-current={active ? "page" : undefined}
                         className={cn(
                           "relative flex items-center gap-3 rounded-xl mx-2 px-3 py-2.5",
                           "text-sm font-body",
@@ -217,3 +219,5 @@ export function Sidebar() {
     </div>
   );
 }
+
+export const Sidebar = memo(SidebarComponent);

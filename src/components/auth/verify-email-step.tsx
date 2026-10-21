@@ -1,10 +1,11 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
-import { ArrowLeft, Mail, Shield, CheckCircle } from "lucide-react"
+import { ArrowLeft, Mail, Shield, CircleCheck } from "lucide-react"
 import { useAuthFlowStore } from "@/stores/auth-flow-store"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { OTPInput } from "@/components/ui/otp-input"
 
 interface VerifyEmailStepProps {
   onVerified: () => void
@@ -91,7 +92,7 @@ export function VerifyEmailStep({ onVerified, onBack }: VerifyEmailStepProps) {
     return (
       <div className="flex flex-col items-center justify-center py-8 space-y-3">
         <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/20">
-          <CheckCircle className="h-7 w-7 text-emerald-400" />
+          <CircleCheck className="h-7 w-7 text-emerald-400" />
         </div>
         <p className="font-heading text-lg font-semibold text-foreground">Email verified!</p>
       </div>
@@ -114,16 +115,14 @@ export function VerifyEmailStep({ onVerified, onBack }: VerifyEmailStepProps) {
           We sent a code to{" "}
           <strong className="text-foreground">{emailVerification.email}</strong>
         </p>
-        <Input
+        <OTPInput
           label="6-digit verification code"
-          placeholder="000000"
           value={code}
-          onChange={(e) => {
-            setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+          onChange={(value) => {
+            setCode(value)
             setError("")
           }}
           onKeyDown={(e) => e.key === "Enter" && handleVerify()}
-          className="text-center text-2xl tracking-[0.5em] font-mono"
           error={error}
         />
         <Button

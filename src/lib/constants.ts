@@ -102,6 +102,9 @@ export const Routes = {
   REGISTER: "/register",
   DASHBOARD: "/",
   CIRCLES: "/circles",
+  CIRCLES_SAVED: "/circles/saved",
+  CIRCLES_ORGANIZING: "/circles/organizing",
+  CIRCLES_COMPARE: "/circles/compare",
   CIRCLE_DETAIL: (id: string) => `/circles/${id}`,
   CREATE_CIRCLE: "/circles/create",
   CIRCLE_EXPORT: (id: string) => `/circles/${id}/export`,
@@ -112,6 +115,9 @@ export const Routes = {
   PAYOUTS: "/payouts",
   PEOPLE: "/people",
   PROFILE: "/profile",
+  /** Unauthenticated public profile — deliberately outside the authed group. */
+  PUBLIC_PROFILE: (handle: string) => `/u/${handle}`,
+  REPUTATION: "/reputation",
   COMMUNITIES: "/communities",
   CREATE_COMMUNITY: "/communities/create",
   COMMUNITY_DETAIL: (id: string) => `/communities/${id}`,
@@ -122,6 +128,9 @@ export const Routes = {
   SETTINGS_ACCOUNT: "/settings/account",
   SETTINGS_PRIVACY: "/settings/privacy",
   SETTINGS_SESSIONS: "/settings/sessions",
+  SETTINGS_THEME: "/settings/theme",
+  SETTINGS_LANGUAGE: "/settings/language",
+  SETTINGS_PAYMENT: "/settings/payment",
   WALLET: "/wallet",
   WALLET_DEPOSIT: "/wallet/deposit",
   WALLET_WITHDRAW: "/wallet/withdraw",
@@ -149,3 +158,6 @@ export const Routes = {
   BAD_REQUEST: "/bad-request",
   INTERNAL_ERROR: "/internal-error",
 } as const
+
+/** Fallback NGN/USDC exchange rate. Override with NEXT_PUBLIC_NGN_RATE env var. */
+export const NGN_FALLBACK_RATE = Number(process.env.NEXT_PUBLIC_NGN_RATE ?? 1550)

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useMultiWalletStore } from "@/stores/multi-wallet-store";
+import { useWalletConnectStore } from "@/stores/walletconnect-store";
+import { usePasskeyWalletStore } from "@/stores/passkey-wallet-store";
+import { useLedgerStore } from "@/stores/ledger-store";
 import type { WalletAdapter } from "@/lib/wallet/types";
 
 const mockGetAdapter = vi.fn();
@@ -59,26 +62,18 @@ describe("useMultiWallet store via hooks", () => {
       activeWalletId: null,
       wallets: {},
       detectedWallets: [],
-      isConnected: false,
-      address: null,
-      isConnecting: false,
-      error: null,
-      activeAdapter: null,
       isSelectorOpen: false,
     });
   });
 
   describe("connection state", () => {
-    it("starts disconnected", () => {
+    it("starts with no active wallet", () => {
       const state = useMultiWalletStore.getState();
-      expect(state.isConnected).toBe(false);
-      expect(state.isConnecting).toBe(false);
-      expect(state.address).toBeNull();
-      expect(state.error).toBeNull();
-      expect(state.activeAdapter).toBeNull();
+      expect(state.activeWalletId).toBeNull();
+      expect(state.wallets).toEqual({});
     });
 
-    it("reflects connected state", () => {
+    it("reflects connected state via wallet entry", () => {
       const adapter = createMockAdapter();
       useMultiWalletStore.setState({
         activeWalletId: "freighter",
@@ -93,15 +88,12 @@ describe("useMultiWallet store via hooks", () => {
             status: "connected",
           },
         },
-        isConnected: true,
-        address: "GTEST123",
-        activeAdapter: adapter,
       });
 
       const state = useMultiWalletStore.getState();
-      expect(state.isConnected).toBe(true);
-      expect(state.address).toBe("GTEST123");
-      expect(state.activeAdapter).toBe(adapter);
+      expect(state.activeWalletId).toBe("freighter");
+      expect(state.wallets.freighter.publicKey).toBe("GTEST123");
+      expect(state.wallets.freighter.adapter).toBe(adapter);
     });
   });
 
@@ -179,7 +171,6 @@ describe("useMultiWallet store via hooks", () => {
       const state = useMultiWalletStore.getState();
       expect(state.wallets.freighter).toBeUndefined();
       expect(state.activeWalletId).toBeNull();
-      expect(state.isConnected).toBe(false);
     });
 
     it("switchWallet changes active wallet", () => {
@@ -278,71 +269,64 @@ describe("useMultiWallet store via hooks", () => {
 
   describe("WC2 state", () => {
     it("starts with idle pairing state", () => {
-      const state = useMultiWalletStore.getState();
-      expect(state.wc2PairingState).toBe("idle");
-      expect(state.wc2PairingUri).toBeNull();
-      expect(state.wc2RelayStatus).toBe("healthy");
+      const state = useWalletConnectStore.getState();
+      expect(state.pairingState).toBe("idle");
+      expect(state.pairingUri).toBeNull();
+      expect(state.relayStatus).toBe("healthy");
     });
 
     it("setWc2PairingUri updates URI and state", () => {
-      useMultiWalletStore.getState().setWc2PairingUri("wc:test");
-      expect(useMultiWalletStore.getState().wc2PairingUri).toBe("wc:test");
-      expect(useMultiWalletStore.getState().wc2PairingState).toBe("pairing");
+      useWalletConnectStore.getState().setPairingUri("wc:test");
+      expect(useWalletConnectStore.getState().pairingUri).toBe("wc:test");
+      expect(useWalletConnectStore.getState().pairingState).toBe("pairing");
     });
 
     it("resetWc2Pairing clears all WC2 state", () => {
-      useMultiWalletStore.getState().setWc2PairingUri("wc:test");
-      useMultiWalletStore.getState().resetWc2Pairing();
+      useWalletConnectStore.getState().setPairingUri("wc:test");
+      useWalletConnectStore.getState().reset();
 
-      const state = useMultiWalletStore.getState();
-      expect(state.wc2PairingUri).toBeNull();
-      expect(state.wc2PairingState).toBe("idle");
-      expect(state.wc2PairingError).toBeNull();
+      const state = useWalletConnectStore.getState();
+      expect(state.pairingUri).toBeNull();
+      expect(state.pairingState).toBe("idle");
+      expect(state.pairingError).toBeNull();
     });
   });
 
   describe("passkey state", () => {
     it("starts with idle passkey state", () => {
-      const state = useMultiWalletStore.getState();
-      expect(state.passkeyState).toBe("idle");
-      expect(state.passkeyError).toBeNull();
-      expect(state.passkeyPublicKey).toBeNull();
+      const state = usePasskeyWalletStore.getState();
+      expect(state.state).toBe("idle");
+      expect(state.error).toBeNull();
+      expect(state.publicKey).toBeNull();
     });
 
     it("resetPasskeyState clears all passkey state", () => {
-      useMultiWalletStore.setState({
-        passkeyState: "connected",
-        passkeyPublicKey: "GPK123",
-      });
-      useMultiWalletStore.getState().resetPasskeyState();
+      usePasskeyWalletStore.setState({ state: "connected", publicKey: "GPK123" });
+      usePasskeyWalletStore.getState().reset();
 
-      const state = useMultiWalletStore.getState();
-      expect(state.passkeyState).toBe("idle");
-      expect(state.passkeyError).toBeNull();
-      expect(state.passkeyPublicKey).toBeNull();
+      const state = usePasskeyWalletStore.getState();
+      expect(state.state).toBe("idle");
+      expect(state.error).toBeNull();
+      expect(state.publicKey).toBeNull();
     });
   });
 
   describe("ledger state", () => {
     it("starts with idle ledger state", () => {
-      const state = useMultiWalletStore.getState();
-      expect(state.ledgerConnectionState).toBe("idle");
-      expect(state.ledgerFirmwareVersion).toBeNull();
+      const state = useLedgerStore.getState();
+      expect(state.connectionState).toBe("idle");
+      expect(state.firmwareVersion).toBeNull();
     });
 
     it("resetLedgerState clears all ledger state", () => {
-      useMultiWalletStore.setState({
-        ledgerConnectionState: "connected",
-        ledgerFirmwareVersion: "2.1.0",
-        ledgerStellarAppVersion: "5.0.0",
-      });
-      useMultiWalletStore.getState().resetLedgerState();
+      useLedgerStore.setState({ connectionState: "connected", firmwareVersion: "2.1.0", stellarAppVersion: "5.0.0" });
+      useLedgerStore.getState().reset();
 
-      const state = useMultiWalletStore.getState();
-      expect(state.ledgerConnectionState).toBe("idle");
-      expect(state.ledgerFirmwareVersion).toBeNull();
-      expect(state.ledgerStellarAppVersion).toBeNull();
-      expect(state.ledgerFirmwareWarnings).toEqual([]);
+      const state = useLedgerStore.getState();
+      expect(state.connectionState).toBe("idle");
+      expect(state.firmwareVersion).toBeNull();
+      expect(state.stellarAppVersion).toBeNull();
+      expect(state.firmwareWarnings).toEqual([]);
     });
   });
 

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { OTPInput } from "@/components/ui/otp-input"
 
 interface TOTPSetupProps {
   totpUri: string
@@ -41,6 +41,8 @@ export function TOTPSetup({ totpUri, totpSecret, onConfirm, error, isLoading }: 
       <div className="flex justify-center">
         <canvas
           ref={canvasRef}
+          role="img"
+          aria-label="QR code for authenticator app setup"
           className="rounded-xl bg-white p-4"
         />
       </div>
@@ -55,13 +57,10 @@ export function TOTPSetup({ totpUri, totpSecret, onConfirm, error, isLoading }: 
       </div>
 
       <div className="space-y-3">
-        <Input
+        <OTPInput
           label="Enter the 6-digit code from your authenticator app"
-          placeholder="000000"
           value={code}
-          onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-          maxLength={6}
-          className="text-center text-2xl tracking-[0.5em] font-mono"
+          onChange={setCode}
           error={error}
         />
         <Button

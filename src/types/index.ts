@@ -23,7 +23,7 @@ export type MemberStatus =
   | "left"
   | "removed"
 
-export type NotificationChannel = "email" | "push" | "in_app" | "sms"
+export type NotificationChannel = "email" | "push" | "in_app" | "sms" | string
 
 export type PenaltyType = "late_fee" | "strike" | "collateral_loss" | "suspension"
 
@@ -133,6 +133,7 @@ export interface Notification {
   body?: string | null
   data?: Record<string, unknown> | null
   isRead: boolean
+  isArchived?: boolean
   channel: NotificationChannel
   sentAt?: string | null
   createdAt: string
@@ -180,10 +181,11 @@ export interface PaginationMeta {
 }
 
 export interface ApiResponse<T = unknown> {
-  success: boolean
+  success?: boolean
   data?: T
   error?: string
   meta?: PaginationMeta
+  [key: string]: unknown
 }
 
 /* ───── Form Data ───── */

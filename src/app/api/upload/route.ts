@@ -1,46 +1,77 @@
+import { logger } from "@/lib/logger";
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
 import { blockInProduction } from "@/lib/security/dev-only-route";
+// Pure helpers shared with the client — the `/p/<slug>` shape and the shape of
+// an idempotency key, so the two can never disagree about either.
+import { getUploadPath } from "@/app/upload/utils/upload";
+import {
+  IDEMPOTENCY_KEY_HEADER,
+  isValidIdempotencyKey,
+} from "@/app/upload/utils/upload-idempotency";
+import { isAuthorized } from "./auth";
+import { isSlugTaken, validateUpload } from "./publish";
+import {
+  findUploadByIdempotencyKey,
+  purgeUpload,
+  stageUpload,
+  sweepStaging,
+} from "./staging";
 
-const PAGES_DIR = path.join(process.cwd(), "content/pages");
-const ALLOWED_EXTENSIONS = [".md", ".html"];
-const MAX_SIZE = 5 * 1024 * 1024; // 5MB
-
-// Ensure pages directory exists
-if (!fs.existsSync(PAGES_DIR)) {
-  fs.mkdirSync(PAGES_DIR, { recursive: true });
-}
-
-const SESSIONS_FILE = path.join(process.cwd(), "content", "sessions.json");
-
-// Session-based auth (checks httpOnly cookie set by /api/auth/login)
-function isAuthorized(request: NextRequest): boolean {
-  const cookie = request.cookies.get("moistello_session");
-  if (!cookie) return false;
-  if (!fs.existsSync(SESSIONS_FILE)) return false;
-
-  try {
-    const sessions = JSON.parse(fs.readFileSync(SESSIONS_FILE, "utf-8"));
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const session = sessions.find((s: any) => s.token === cookie.value);
-    if (!session) return false;
-    return Date.now() - session.createdAt < 7 * 24 * 60 * 60 * 1000;
-  } catch (e) {
-    console.error("[api:upload] Session check failed:", e)
-    return false;
-  }
-}
-
+/**
+ * Phase 1 of the two-phase upload: accept the bytes and stage them.
+ *
+ * This request deliberately does **not** publish. It validates, stores the
+ * payload under a server-generated id, and hands that id back so the client
+ * can drive phase 2 (`POST /api/upload/finalize`) as a separate, retryable
+ * step. Reserving the slug here means the collision check happens once, before
+ * the user waits on the publish call.
+ *
+ * Every request carries a client-generated idempotency key naming the upload
+ * it belongs to. The key is what makes this phase safe to retry: a repeat
+ * request carrying a key that was already staged replays the existing record
+ * instead of creating a second one, and a key whose record already published
+ * reports that the page is live. Retrying is therefore never what produces
+ * duplicates — a genuinely new upload gets a new key, and that one does get
+ * its own record.
+ */
 export async function POST(request: NextRequest) {
   // Local-development scaffolding — writes files via fs and authenticates
   // against a flat JSON session store.
   const blocked = blockInProduction();
   if (blocked) return blocked;
 
-  // Auth check
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Opportunistic cleanup of uploads that were staged but never finalized.
+  sweepStaging();
+
+  // Required, and validated before the body is touched: a request that cannot
+  // be correlated to an upload could not be de-duplicated, and buffering a
+  // file only to throw it away is exactly the duplicate we are preventing.
+  const idempotencyKey = request.headers.get(IDEMPOTENCY_KEY_HEADER);
+  if (!isValidIdempotencyKey(idempotencyKey)) {
+    return NextResponse.json(
+      { error: `A valid ${IDEMPOTENCY_KEY_HEADER} header is required` },
+      { status: 400 },
+    );
+  }
+
+  // A retry of an upload this key already covers. Nothing is read from the
+  // body or written to disk: the record the first attempt produced is the
+  // answer, whether it is still staged or already published.
+  const known = findUploadByIdempotencyKey(idempotencyKey);
+  if (known) {
+    return NextResponse.json({
+      staged: !known.published,
+      replayed: true,
+      alreadyPublished: known.published,
+      uploadId: known.uploadId,
+      slug: known.slug,
+      url: getUploadPath(known.slug),
+      bytes: known.bytes,
+    });
   }
 
   let formData: FormData;
@@ -55,102 +86,66 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No file provided" }, { status: 400 });
   }
 
-  // Validate extension
-  const originalName = file.name;
-  const ext = path.extname(originalName).toLowerCase();
-  if (!ALLOWED_EXTENSIONS.includes(ext)) {
+  const validation = validateUpload(file.name, file.size);
+  if (!validation.ok) {
     return NextResponse.json(
-      { error: "Only .md and .html files are allowed" },
-      { status: 400 }
+      { error: validation.failure.error },
+      { status: validation.failure.status },
     );
   }
 
-  // Validate size
-  if (file.size > MAX_SIZE) {
-    return NextResponse.json(
-      { error: `File too large (max ${MAX_SIZE / 1024 / 1024}MB)` },
-      { status: 400 }
-    );
-  }
-
-  // Generate slug from filename (unique — reject if exists)
-  const slug = originalName.replace(ext, "");
-  // Only allow slugs with letters, numbers, hyphens, underscores
-  if (!/^[a-zA-Z0-9\-_]+$/.test(slug)) {
-    return NextResponse.json(
-      { error: "Filename must contain only letters, numbers, hyphens, or underscores" },
-      { status: 400 }
-    );
-  }
-
-  // Check for slug collision before writing
-  const filename = `${slug}.md`;
-  const filePath = path.join(PAGES_DIR, filename);
-
-  if (fs.existsSync(filePath)) {
+  if (isSlugTaken(validation.slug)) {
     const overwrite = request.nextUrl.searchParams.get("overwrite");
     if (overwrite !== "true") {
       return NextResponse.json(
         {
-          error: `A page with slug "${slug}" already exists. Add ?overwrite=true to confirm overwrite.`,
-          slug,
+          error: `A page with slug "${validation.slug}" already exists. Add ?overwrite=true to confirm overwrite.`,
+          slug: validation.slug,
         },
-        { status: 409 }
+        { status: 409 },
       );
     }
   }
 
-  // Read content
-  const buffer = await file.arrayBuffer();
-  let content = new TextDecoder().decode(buffer);
-
-  // For .html files: strip everything except the body content
-  if (ext === ".html") {
-    const titleMatch = content.match(/<title>(.*?)<\/title>/i);
-    const descMatch = content.match(
-      /<meta\s+name=["']description["']\s+content=["'](.*?)["']/i
-    );
-    const bodyMatch = content.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-
-    const extractedTitle = titleMatch ? titleMatch[1].trim() : slug;
-    const extractedDesc = descMatch ? descMatch[1].trim() : "";
-
-    // Strip html/head/body wrappers, keep only body inner content
-    let strippedContent = bodyMatch ? bodyMatch[1].trim() : content;
-    // Remove any remaining script/style tags
-    strippedContent = strippedContent.replace(
-      /<(script|style|iframe|object|embed)[^>]*>[\s\S]*?<\/\1>/gi,
-      ""
-    );
-    // Remove onclick, onload, etc
-    strippedContent = strippedContent.replace(/\son\w+\s*=\s*"[^"]*"/gi, "");
-
-    // Convert to .md with frontmatter
-    content = [
-      "---",
-      `title: ${extractedTitle}`,
-      `description: ${extractedDesc}`,
-      "---",
-      "",
-      strippedContent,
-    ].join("\n");
-  }
-
-  // Write the file (checked for collision above)
+  let staged;
   try {
-    fs.writeFileSync(filePath, content, "utf-8");
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  } catch (_err) {
-    return NextResponse.json(
-      { error: "Failed to write file" },
-      { status: 500 }
-    );
+    const buffer = Buffer.from(await file.arrayBuffer());
+    staged = stageUpload(buffer, {
+      originalName: file.name,
+      slug: validation.slug,
+      extension: validation.extension,
+      idempotencyKey,
+    });
+  } catch (error) {
+    logger.error("[api:upload] Failed to stage upload:", error);
+    return NextResponse.json({ error: "Failed to store file" }, { status: 500 });
   }
 
   return NextResponse.json({
-    success: true,
-    slug,
-    url: `/p/${slug}`,
-    message: `Published as /p/${slug}`,
+    staged: true,
+    // `stageUpload` re-checks the key itself, so a request that raced another
+    // one for the same key still reports the replay rather than a fresh record.
+    replayed: staged.replayed,
+    uploadId: staged.meta.uploadId,
+    slug: staged.meta.slug,
+    bytes: staged.meta.bytes,
   });
+}
+
+/** Cancel a staged upload the client decided not to publish. */
+export async function DELETE(request: NextRequest) {
+  const blocked = blockInProduction();
+  if (blocked) return blocked;
+
+  if (!isAuthorized(request)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const uploadId = request.nextUrl.searchParams.get("uploadId");
+  if (!uploadId) {
+    return NextResponse.json({ error: "uploadId is required" }, { status: 400 });
+  }
+
+  purgeUpload(uploadId);
+  return NextResponse.json({ cancelled: true });
 }

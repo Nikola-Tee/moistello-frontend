@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { getWalletRegistry } from "@/lib/wallet/registry";
 import { getSessionManager } from "@/lib/wallet/session-manager";
-import { WC2_QR_EXPIRATION_MS, STELLAR_NETWORK } from "@/lib/constants";
+import { STELLAR_NETWORK } from "@/lib/constants";
 import { fetchBalanceWithBackoff } from "@/lib/wallet/balance-cache";
 import type {
   WalletAdapter,
@@ -38,38 +38,13 @@ interface MultiWalletState {
   isScanning: boolean;
   isInitializing: boolean;
 
-  /* Convenience state for auth / UI pages */
-  isConnected: boolean;
-  address: string | null;
-  isConnecting: boolean;
+  /* UI-only state */
   connectingWalletId: WalletId | null;
-  error: string | null;
-  activeAdapter: WalletAdapter | null;
   isSelectorOpen: boolean;
 
   /* Route-specific error isolation for enterprise-grade UX */
   loginError: string | null;
   registerError: string | null;
-
-  /* WC2-specific state */
-  wc2PairingUri: string | null;
-  wc2PairingState: "idle" | "connecting" | "pairing" | "awaiting_approval" | "approved" | "rejected" | "timeout" | "error";
-  wc2RelayStatus: "healthy" | "degraded" | "down";
-  wc2PairingError: string | null;
-  wc2QrExpiresAt: number | null;
-
-  /* Passkey-specific state */
-  passkeyState: "idle" | "registering" | "awaiting_biometric" | "authenticating" | "deriving" | "connected" | "error";
-  passkeyError: string | null;
-  passkeyPublicKey: string | null;
-
-  /* Ledger-specific state */
-  ledgerTransportType: "usb" | "ble" | null;
-  ledgerConnectionState: "idle" | "detecting" | "connecting" | "waiting_for_app" | "waiting_for_confirm" | "connected" | "disconnected" | "error" | "waiting_for_reconnect";
-  ledgerFirmwareVersion: string | null;
-  ledgerStellarAppVersion: string | null;
-  ledgerFirmwareWarnings: string[];
-  ledgerConnectionError: string | null;
 
   /* Actions */
   scanWallets: () => void;
@@ -87,45 +62,31 @@ interface MultiWalletState {
   setRegisterError: (error: string | null) => void;
   clearLoginError: () => void;
   clearRegisterError: () => void;
-  /* WC2 actions */
-  setWc2PairingUri: (uri: string | null) => void;
-  setWc2PairingState: (state: MultiWalletState["wc2PairingState"]) => void;
-  setWc2PairingError: (error: string | null) => void;
-  setWc2RelayStatus: (status: MultiWalletState["wc2RelayStatus"]) => void;
-  resetWc2Pairing: () => void;
-  /* Passkey actions */
-  setPasskeyState: (state: MultiWalletState["passkeyState"]) => void;
-  setPasskeyError: (error: string | null) => void;
-  setPasskeyPublicKey: (key: string | null) => void;
-  resetPasskeyState: () => void;
-
-  /* Ledger actions */
-  setLedgerTransportType: (transportType: "usb" | "ble" | null) => void;
-  setLedgerConnectionState: (connectionState: MultiWalletState["ledgerConnectionState"]) => void;
-  setLedgerFirmwareVersion: (version: string | null) => void;
-  setLedgerStellarAppVersion: (version: string | null) => void;
-  setLedgerFirmwareWarnings: (warnings: string[]) => void;
-  setLedgerConnectionError: (error: string | null) => void;
-  resetLedgerState: () => void;
 }
 
-/* Helper: sync convenience fields from wallet record */
-function syncConvenienceState(
-  state: Pick<MultiWalletState, "activeWalletId" | "wallets">
-): Partial<MultiWalletState> {
-  const { activeWalletId, wallets } = state;
-  const activeEntry = activeWalletId ? wallets[activeWalletId] : undefined;
-
-  return {
-    isConnected: activeEntry?.status === "connected" || activeEntry?.status === "reconnecting",
-    address: activeEntry?.publicKey ?? null,
-    isConnecting: activeEntry?.status === "connecting",
-    error:
-      activeEntry?.error != null
-        ? activeEntry.error.message
-        : null,
-    activeAdapter: activeEntry?.adapter ?? null,
-  };
+/**
+ * Deterministic next-active selection policy.
+ *
+ * When the active wallet is disconnected, the next active wallet is the
+ * remaining wallet with the most recent `lastConnected` timestamp (i.e. the
+ * most-recently-connected wallet, matching what the user most recently used).
+ * Ties are broken by wallet id (ascending) so the selection never depends on
+ * object key ordering and is stable across identical states.
+ */
+function pickNextActiveWallet(
+  remaining: Record<WalletId, WalletEntry>
+): WalletId | null {
+  const ids = Object.keys(remaining) as WalletId[];
+  if (ids.length === 0) return null;
+  return ids.reduce<WalletId>((best, id) => {
+    const bestEntry = remaining[best];
+    const entry = remaining[id];
+    if (entry.lastConnected > bestEntry.lastConnected) return id;
+    if (entry.lastConnected === bestEntry.lastConnected) {
+      return id < best ? id : best;
+    }
+    return best;
+  }, ids[0]);
 }
 
 async function runConnectionProbes(
@@ -152,38 +113,13 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
   isScanning: false,
   isInitializing: false,
 
-  /* Convenience defaults */
-  isConnected: false,
-  address: null,
-  isConnecting: false,
+  /* UI-only defaults */
   connectingWalletId: null,
-  error: null,
-  activeAdapter: null,
   isSelectorOpen: false,
 
   /* Route-specific error isolation defaults */
   loginError: null,
   registerError: null,
-
-  /* WC2 defaults */
-  wc2PairingUri: null,
-  wc2PairingState: "idle",
-  wc2RelayStatus: "healthy",
-  wc2PairingError: null,
-  wc2QrExpiresAt: null,
-
-  /* Passkey defaults */
-  passkeyState: "idle",
-  passkeyError: null,
-  passkeyPublicKey: null,
-
-  /* Ledger defaults */
-  ledgerTransportType: null,
-  ledgerConnectionState: "idle",
-  ledgerFirmwareVersion: null,
-  ledgerStellarAppVersion: null,
-  ledgerFirmwareWarnings: [],
-  ledgerConnectionError: null,
 
   init: async () => {
     if (get().isInitializing) return;
@@ -213,7 +149,6 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
         set({
           wallets,
           activeWalletId: nextActiveId,
-          ...syncConvenienceState({ activeWalletId: nextActiveId, wallets }),
         });
 
         await runConnectionProbes(sessions, async (walletId) => {
@@ -274,7 +209,7 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
       };
       set((state) => {
         const existing = state.wallets[walletId];
-        const next = {
+        return {
           wallets: {
             ...state.wallets,
             [walletId]: existing
@@ -291,10 +226,6 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
           },
           activeWalletId: state.activeWalletId,
         };
-        return {
-          ...next,
-          ...syncConvenienceState(next),
-        };
       });
       throw offlineError;
     }
@@ -304,7 +235,7 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
 
     set((state) => {
       const existing = state.wallets[walletId];
-      const next = {
+      return {
         wallets: {
           ...state.wallets,
           [walletId]: existing
@@ -320,11 +251,7 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
               },
         },
         activeWalletId: walletId as WalletId,
-      };
-      return {
-        ...next,
         connectingWalletId: walletId,
-        ...syncConvenienceState(next),
       };
     });
 
@@ -333,7 +260,7 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
       const network = await adapter.getNetwork();
 
       set((state) => {
-        const next = {
+        return {
           wallets: {
             ...state.wallets,
             [walletId]: {
@@ -347,10 +274,6 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
             },
           },
           activeWalletId: walletId,
-        };
-        return {
-          ...next,
-          ...syncConvenienceState(next),
         };
       });
 
@@ -369,7 +292,7 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
 
       set((state) => {
         const existing = state.wallets[walletId];
-        const next = {
+        return {
           wallets: {
             ...state.wallets,
             [walletId]: existing
@@ -385,10 +308,6 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
                 },
           },
           activeWalletId: state.activeWalletId,
-        };
-        return {
-          ...next,
-          ...syncConvenienceState(next),
         };
       });
       throw error;
@@ -406,31 +325,20 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
     set((state) => {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { [walletId]: _, ...remaining } = state.wallets;
-      const remainingIds = Object.keys(remaining) as WalletId[];
       const nextActive =
         state.activeWalletId === walletId
-          ? remainingIds[0] ?? null
+          ? pickNextActiveWallet(remaining)
           : state.activeWalletId;
-      const next = {
+      return {
         wallets: remaining,
         activeWalletId: nextActive,
-      };
-      return {
-        ...next,
-        ...syncConvenienceState(next),
       };
     });
   },
 
   switchWallet: (walletId: WalletId) => {
     getSessionManager().switchTo(walletId);
-    set((state) => {
-      const next = { activeWalletId: walletId };
-      return {
-        ...next,
-        ...syncConvenienceState({ ...state, ...next }),
-      };
-    });
+    set({ activeWalletId: walletId });
   },
 
   refreshBalance: async (walletId: WalletId, forceRefresh = false) => {
@@ -441,16 +349,11 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
       set((state) => {
         const existing = state.wallets[walletId];
         if (existing) {
-          const next = {
+          return {
             wallets: {
               ...state.wallets,
               [walletId]: { ...existing, balance },
             },
-            activeWalletId: state.activeWalletId,
-          };
-          return {
-            ...next,
-            ...syncConvenienceState(next),
           };
         }
         return state;
@@ -464,7 +367,7 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
     set((state) => {
       const existing = state.wallets[walletId];
       if (existing) {
-        const next = {
+        return {
           wallets: {
             ...state.wallets,
             [walletId]: {
@@ -475,10 +378,6 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
           },
           activeWalletId: state.activeWalletId,
         };
-        return {
-          ...next,
-          ...syncConvenienceState(next),
-        };
       }
       return state;
     });
@@ -488,16 +387,12 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
     set((state) => {
       const existing = state.wallets[walletId];
       if (existing) {
-        const next = {
+        return {
           wallets: {
             ...state.wallets,
             [walletId]: { ...existing, status },
           },
           activeWalletId: state.activeWalletId,
-        };
-        return {
-          ...next,
-          ...syncConvenienceState(next),
         };
       }
       return state;
@@ -514,96 +409,6 @@ export const useMultiWalletStore = create<MultiWalletState>()((set, get) => ({
 
   setSelectorOpen: (open: boolean) => {
     set({ isSelectorOpen: open });
-  },
-
-  /* WC2 actions */
-  setWc2PairingUri: (uri: string | null) => {
-    set({
-      wc2PairingUri: uri,
-      wc2PairingState: uri ? "pairing" : "idle",
-      wc2QrExpiresAt: uri ? Date.now() + WC2_QR_EXPIRATION_MS : null,
-    });
-  },
-
-  setWc2PairingState: (state) => {
-    set({ wc2PairingState: state });
-  },
-
-  setWc2PairingError: (error) => {
-    set({
-      wc2PairingError: error,
-      wc2PairingState: error ? "error" : get().wc2PairingState,
-    });
-  },
-
-  setWc2RelayStatus: (status) => {
-    set({ wc2RelayStatus: status });
-  },
-
-  resetWc2Pairing: () => {
-    set({
-      wc2PairingUri: null,
-      wc2PairingState: "idle",
-      wc2PairingError: null,
-      wc2QrExpiresAt: null,
-    });
-  },
-
-  /* Passkey actions */
-  setPasskeyState: (passkeyState) => {
-    set({ passkeyState });
-  },
-
-  setPasskeyError: (passkeyError) => {
-    set({ passkeyError, passkeyState: passkeyError ? "error" : get().passkeyState });
-  },
-
-  setPasskeyPublicKey: (passkeyPublicKey) => {
-    set({ passkeyPublicKey });
-  },
-
-  resetPasskeyState: () => {
-    set({
-      passkeyState: "idle",
-      passkeyError: null,
-      passkeyPublicKey: null,
-    });
-  },
-
-  /* Ledger actions */
-  setLedgerTransportType: (transportType) => {
-    set({ ledgerTransportType: transportType });
-  },
-
-  setLedgerConnectionState: (connectionState) => {
-    set({ ledgerConnectionState: connectionState });
-  },
-
-  setLedgerFirmwareVersion: (firmwareVersion) => {
-    set({ ledgerFirmwareVersion: firmwareVersion });
-  },
-
-  setLedgerStellarAppVersion: (stellarAppVersion) => {
-    set({ ledgerStellarAppVersion: stellarAppVersion });
-  },
-
-  setLedgerFirmwareWarnings: (warnings) => {
-    set({ ledgerFirmwareWarnings: warnings });
-  },
-
-  setLedgerConnectionError: (error) => {
-    set({ ledgerConnectionError: error });
-  },
-
-  resetLedgerState: () => {
-    set({
-      ledgerTransportType: null,
-      ledgerConnectionState: "idle",
-      ledgerFirmwareVersion: null,
-      ledgerStellarAppVersion: null,
-      ledgerFirmwareWarnings: [],
-      ledgerConnectionError: null,
-    });
   },
 
   setLoginError: (loginError) => set({ loginError }),

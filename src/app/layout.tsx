@@ -12,7 +12,18 @@ import { AuthProvider } from "@/providers/auth-provider"
 import { ToastProvider } from "@/providers/toast-provider"
 import { MonitoringProvider } from "@/providers/monitoring-provider"
 import { LocaleProvider } from "@/lib/locale/context"
+import { getServerDictionary } from "@/lib/locale/server-dictionaries"
+import { LOCALE_BOOTSTRAP_SCRIPT, dirForLocale, resolveLocale } from "@/lib/locale/locale-cookie"
+import { HmacProvider } from "@/providers/HmacProvider"
 import { PwaRegister } from "@/components/pwa-register"
+import {
+  AUTHOR_NAME,
+  OG_IMAGE,
+  SITE_NAME,
+  SITE_URL,
+  TWITTER_CREATOR,
+  TWITTER_SITE,
+} from "@/lib/seo/site"
 
 const spaceGrotesk = Space_Grotesk({
   subsets: ["latin"],
@@ -37,10 +48,12 @@ export const metadata: Metadata = {
   title: "Moistello — Stellar Savings Circles",
   description: "Decentralized rotating savings and credit circles on Stellar. Join trustless ROSCAs with USDC/XLM, build MoiScore reputation, and achieve financial freedom.",
   keywords: "moistello, stellar, blockchain, savings circles, defi, decentralized finance, rotating credit, USDC, XLM, smart contracts, soroban",
-  authors: [{ name: "Nekwachukwu Ucheokoye" }],
-  creator: "Nekwachukwu Ucheokoye",
+  authors: [{ name: AUTHOR_NAME }],
+  creator: "Moistello",
   publisher: "Moistello",
-  metadataBase: new URL("https://moistello.com"),
+  // Shared with src/lib/seo/route-metadata.ts so relative canonicals, og:url
+  // and the sitemap can never resolve against a different origin.
+  metadataBase: new URL(SITE_URL),
   alternates: {
     canonical: "/",
   },
@@ -57,26 +70,19 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "en_US",
-    url: "https://moistello.com",
-    siteName: "Moistello",
+    url: SITE_URL,
+    siteName: SITE_NAME,
     title: "Moistello — Decentralized Savings Circles on Stellar",
     description: "Join trustless savings circles with zero intermediaries. Built on Stellar for true financial sovereignty and on-chain reputation.",
-    images: [
-      {
-        url: "/logo.jpg",
-        width: 1200,
-        height: 630,
-        alt: "Moistello - Decentralized Stellar Savings Platform",
-      },
-    ],
+    images: [OG_IMAGE],
   },
   twitter: {
     card: "summary_large_image",
-    site: "@moistello",
-    creator: "@nekwasar",
+    site: TWITTER_SITE,
+    creator: TWITTER_CREATOR,
     title: "Moistello — Stellar Savings Circles",
     description: "Build trustless savings circles on Stellar. Join rotating credit groups with USDC/XLM, earn on-chain reputation, and achieve financial sovereignty.",
-    images: ["/logo.jpg"],
+    images: [OG_IMAGE.url],
   },
   icons: {
     icon: "/favicon.ico",
@@ -93,6 +99,15 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 5,
+  // Lets the document extend under the notch, home indicator and rounded
+  // corners on notched devices. Without this the browser letterboxes the
+  // viewport and every `env(safe-area-inset-*)` reads 0, so fixed bottom UI
+  // (the mobile nav) sits underneath the home indicator. Paired with
+  // `appleWebApp.statusBarStyle = "black-translucent"` above, the top inset is
+  // equally real. The matching tokens live in globals.css as
+  // `--safe-area-inset-*`; they collapse to 0px on every other device, so the
+  // utilities built on them are safe to apply unconditionally.
+  viewportFit: "cover",
 }
 
 export default function RootLayout({
@@ -105,15 +120,33 @@ export default function RootLayout({
   const requestHeaders = headers()
   const nonce = requestHeaders.get("x-nonce") ?? undefined
   const csrfToken = requestHeaders.get("x-csrf-token") ?? undefined
+  
+  // #211: Get locale from headers/cookies for lang attribute
+  const locale = resolveLocale(requestHeaders.get("x-locale"))
+  const dir = dirForLocale(locale)
+  // Resolved here rather than in the provider so the first paint carries real
+  // translated copy. Fetching the dictionary in an effect would always render
+  // English first and then swap, which reads to the user as a flash of the
+  // wrong language even though <html lang> was already correct. The cost is
+  // that the dictionary travels in the RSC payload (~30 KB, gzips to under a
+  // tenth of that) — unavoidable, since hydration has to produce the same
+  // strings the server rendered or React will patch the whole tree.
+  const dictionary = getServerDictionary(locale)
 
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang={locale} dir={dir} suppressHydrationWarning>
 <head>
         {csrfToken ? <meta name="csrf-token" content={csrfToken} /> : null}
          <script
             nonce={nonce}
             dangerouslySetInnerHTML={{
-              __html: `(function(){try{var t=localStorage.getItem('moistello_theme');var theme='system';var density='comfortable';var fontSize='medium';if(t){var p=JSON.parse(t);if(p.state){theme=p.state.theme||'system';density=p.state.density||'comfortable';fontSize=p.state.fontSize||'medium'}}if(theme==='light'){document.documentElement.classList.remove('dark')}else if(theme==='dark'){document.documentElement.classList.add('dark')}else{var prefersDark=window.matchMedia('(prefers-color-scheme: dark)').matches;if(prefersDark){document.documentElement.classList.add('dark')}else{document.documentElement.classList.remove('dark')}}document.documentElement.setAttribute('data-density',density);document.documentElement.setAttribute('data-font-size',fontSize)}catch(e){console.warn('[layout] Failed to apply theme:',e)}})()`,
+              __html: `(function(){try{var t=localStorage.getItem('moistello_theme');var theme='system';var density='comfortable';var fontSize='medium';if(t){var p=JSON.parse(t);if(p.state){theme=p.state.theme||'system';density=p.state.density||'comfortable';fontSize=p.state.fontSize||'medium'}}var prefersDark=window.matchMedia('(prefers-color-scheme: dark)').matches;var isDark=theme==='dark'||(theme==='system'&&prefersDark);var resolved=isDark?'dark':'light';if(isDark){document.documentElement.classList.add('dark')}else{document.documentElement.classList.remove('dark')}document.documentElement.setAttribute('data-theme',resolved);document.documentElement.style.colorScheme=resolved;document.documentElement.setAttribute('data-density',density);document.documentElement.setAttribute('data-font-size',fontSize)}catch(e){void e}})()`,
+            }}
+          />
+         <script
+            nonce={nonce}
+            dangerouslySetInnerHTML={{
+              __html: LOCALE_BOOTSTRAP_SCRIPT,
             }}
           />
          <script
@@ -202,10 +235,12 @@ export default function RootLayout({
           <ThemeProvider>
             <MotionProvider>
               <AuthProvider>
-                <LocaleProvider>
+                <LocaleProvider initialLocale={locale} initialDictionary={dictionary}>
                   <ToastProvider>
                     <MonitoringProvider>
-                      {children}
+                      <HmacProvider>
+                        {children}
+                      </HmacProvider>
                     </MonitoringProvider>
                   </ToastProvider>
                 </LocaleProvider>

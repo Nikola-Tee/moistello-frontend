@@ -1,14 +1,11 @@
 "use client"
 
 import { useState } from "react"
+import { useForm } from "react-hook-form"
+import { contributorSchema, zodResolver, type ContributorInput } from "@/lib/validation"
 import { Button } from "@/components/ui/button"
-
-interface FormData {
-  name: string
-  github: string
-  contribution: string
-  bio: string
-}
+import { ErrorSummary } from "@/components/shared/error-summary"
+import { getCsrfHeaders } from "@/lib/auth/csrf"
 
 const contributionAreas = [
   "Frontend Development (TypeScript/Next.js)",
@@ -23,52 +20,77 @@ const contributionAreas = [
   "Other",
 ]
 
+type FormState = "idle" | "submitting" | "success" | "error"
+
 export function ContributionForm() {
-  const [formData, setFormData] = useState<FormData>({
-    name: "",
-    github: "",
-    contribution: "",
-    bio: "",
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm<ContributorInput>({
+    resolver: zodResolver(contributorSchema),
+    mode: "onTouched",
+    defaultValues: { name: "", github: "", contribution: "", bio: "" },
+    // react-hook-form focuses the first invalid field after a failed submit by
+    // default, which runs *after* the invalid callback and so overrode the error
+    // summary's focus. Two things grabbing focus means the screen reader lands
+    // mid-form instead of on the alert that explains the failure, so the summary
+    // owns focus and RHF is told to keep its hands off.
+    shouldFocusError: false,
   })
-  const [formErrors, setFormErrors] = useState<Record<string, string>>({})
-  const [formState, setFormState] = useState<"idle" | "submitting" | "success" | "error">("idle")
+  const [formState, setFormState] = useState<FormState>("idle")
   const [formError, setFormError] = useState<string | null>(null)
+  const [submitAttempted, setSubmitAttempted] = useState(false)
 
-  const validateForm = () => {
-    const errors: Record<string, string> = {}
-    if (!formData.name.trim()) errors.name = "Name is required"
-    if (!formData.github.trim()) errors.github = "GitHub profile is required"
-    else if (!formData.github.startsWith("https://github.com/"))
-      errors.github = "Please enter a valid GitHub URL"
-    if (!formData.contribution) errors.contribution = "Select an area"
-    setFormErrors(errors)
-    return Object.keys(errors).length === 0
-  }
+  const fieldConfig = [
+    { name: "name" as const, label: "Name", id: "app-name" },
+    { name: "github" as const, label: "GitHub profile", id: "app-github" },
+    { name: "contribution" as const, label: "Contribution area", id: "app-area" },
+    { name: "bio" as const, label: "Bio", id: "app-bio" },
+  ]
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!validateForm()) return
+  // Only summarise after a submit attempt: on first render this would list
+  // every field as broken before the user has done anything.
+  const errorEntries = submitAttempted
+    ? fieldConfig
+        .filter(({ name }) => errors[name])
+        .map(({ name, label, id }) => ({
+          fieldId: id,
+          label,
+          message: errors[name]?.message ?? "Invalid value",
+        }))
+    : []
 
+  const onValid = async (values: ContributorInput) => {
     setFormState("submitting")
     setFormError(null)
 
     try {
       const res = await fetch("/api/contributors", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        headers: { "Content-Type": "application/json", ...getCsrfHeaders() },
+        body: JSON.stringify(values),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error || "Failed to submit")
       }
       setFormState("success")
-      setFormData({ name: "", github: "", contribution: "", bio: "" })
+      reset({ name: "", github: "", contribution: "", bio: "" })
     } catch (err) {
       setFormState("error")
       setFormError(err instanceof Error ? err.message : "Something went wrong")
     }
   }
+
+  // Flip the flag before the invalid handler runs so the summary is rendered
+  // in the same commit as the failed submit.
+  const onInvalid = () => {
+    setSubmitAttempted(true)
+  }
+
+  const handleFormSubmit = handleSubmit(onValid, onInvalid)
 
   if (formState === "success") {
     return (
@@ -93,8 +115,20 @@ export function ContributionForm() {
     )
   }
 
+  const inputClass = (hasError: boolean) =>
+    `w-full h-11 rounded-xl bg-white/5 border px-4 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-foreground ${hasError ? "border-red-400/50" : "border-white/10"}`
+
+  const errorText = (message?: string, id?: string) =>
+    message ? (
+      <p id={id} className="text-xs text-red-400 mt-1">
+        {message}
+      </p>
+    ) : null
+
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleFormSubmit} className="space-y-4" noValidate>
+      <ErrorSummary entries={errorEntries} />
+
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label htmlFor="app-name" className="block text-xs font-medium text-muted-foreground mb-1.5">
@@ -103,15 +137,13 @@ export function ContributionForm() {
           <input
             id="app-name"
             type="text"
-            value={formData.name}
-            onChange={(e) => {
-              setFormData({ ...formData, name: e.target.value })
-              if (formErrors.name) setFormErrors({ ...formErrors, name: "" })
-            }}
-            className={`w-full h-11 rounded-xl bg-white/5 border px-4 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-aurora-violet/50 ${formErrors.name ? "border-red-400/50" : "border-white/10"}`}
             placeholder="Your name"
+            {...register("name")}
+            aria-invalid={errors.name ? true : undefined}
+            aria-describedby={errors.name ? "app-name-error" : undefined}
+            className={inputClass(Boolean(errors.name))}
           />
-          {formErrors.name && <p className="text-xs text-red-400 mt-1">{formErrors.name}</p>}
+          {errorText(errors.name?.message, "app-name-error")}
         </div>
       </div>
 
@@ -122,15 +154,13 @@ export function ContributionForm() {
         <input
           id="app-github"
           type="text"
-          value={formData.github}
-          onChange={(e) => {
-            setFormData({ ...formData, github: e.target.value })
-            if (formErrors.github) setFormErrors({ ...formErrors, github: "" })
-          }}
-          className={`w-full h-11 rounded-xl bg-white/5 border px-4 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-aurora-violet/50 ${formErrors.github ? "border-red-400/50" : "border-white/10"}`}
           placeholder="https://github.com/username"
+          {...register("github")}
+          aria-invalid={errors.github ? true : undefined}
+          aria-describedby={errors.github ? "app-github-error" : undefined}
+          className={inputClass(Boolean(errors.github))}
         />
-        {formErrors.github && <p className="text-xs text-red-400 mt-1">{formErrors.github}</p>}
+        {errorText(errors.github?.message, "app-github-error")}
       </div>
 
       <div>
@@ -139,12 +169,10 @@ export function ContributionForm() {
         </label>
         <select
           id="app-area"
-          value={formData.contribution}
-          onChange={(e) => {
-            setFormData({ ...formData, contribution: e.target.value })
-            if (formErrors.contribution) setFormErrors({ ...formErrors, contribution: "" })
-          }}
-          className={`w-full h-11 rounded-xl bg-white/5 border px-4 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-aurora-violet/50 ${formErrors.contribution ? "border-red-400/50" : "border-white/10"}`}
+          {...register("contribution")}
+          aria-invalid={errors.contribution ? true : undefined}
+          aria-describedby={errors.contribution ? "app-area-error" : undefined}
+          className={inputClass(Boolean(errors.contribution))}
         >
           <option value="">Select area</option>
           {contributionAreas.map((area) => (
@@ -153,7 +181,7 @@ export function ContributionForm() {
             </option>
           ))}
         </select>
-        {formErrors.contribution && <p className="text-xs text-red-400 mt-1">{formErrors.contribution}</p>}
+        {errorText(errors.contribution?.message, "app-area-error")}
       </div>
 
       <div>
@@ -163,15 +191,17 @@ export function ContributionForm() {
         <textarea
           id="app-bio"
           rows={4}
-          value={formData.bio}
-          onChange={(e) => setFormData({ ...formData, bio: e.target.value })}
-          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-aurora-violet/50 resize-y min-h-[80px]"
           placeholder="Tell us about yourself..."
+          {...register("bio")}
+          aria-invalid={errors.bio ? true : undefined}
+          aria-describedby={errors.bio ? "app-bio-error" : undefined}
+          className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-aurora-violet/50 resize-y min-h-[80px]"
         />
+        {errorText(errors.bio?.message, "app-bio-error")}
       </div>
 
       {formState === "error" && formError && (
-        <div className="flex items-start gap-2 text-sm text-red-400 bg-red-500/10 rounded-xl px-4 py-3">
+        <div className="flex items-start gap-2 text-sm text-red-400 bg-red-500/10 rounded-xl px-4 py-3" role="alert">
           <AlertCircleIcon />
           <span>{formError}</span>
         </div>

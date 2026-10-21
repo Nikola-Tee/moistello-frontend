@@ -2,6 +2,7 @@
 
 import * as Sentry from "@sentry/nextjs"
 import type { AuthErrorCode } from "@/stores/auth-flow-store"
+import { attachLogFlushListeners, logger, redactString } from "@/lib/logger"
 
 export type MetricName =
   | "governance.proposal.created"
@@ -47,10 +48,7 @@ let metricBuffer: MetricEvent[] = []
 let flushTimer: ReturnType<typeof setInterval> | null = null
 
 function stripPii(value: string): string {
-  return value
-    .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "[email]")
-    .replace(/G[A-Za-z0-9]{55}/g, "[stellar-address]")
-    .replace(/0x[a-fA-F0-9]{40}/g, "[evm-address]")
+  return redactString(value)
 }
 
 export function captureAuthError(error: unknown, context: AuthErrorContext): void {
@@ -92,7 +90,12 @@ export function captureAuthError(error: unknown, context: AuthErrorContext): voi
     })
   } else {
     const message = error instanceof Error ? error.message : String(error)
-    console.error(`[AuthError] [${context.mode}/${context.step}] ${message}`, tags)
+    logger.error(`[AuthError] [${context.mode}/${context.step}] ${message}`, {
+      step: context.step ?? "unknown",
+      mode: context.mode ?? "unknown",
+      errorCode: context.errorCode ?? "unknown",
+      error,
+    })
   }
 }
 
@@ -149,7 +152,7 @@ export function flushMetrics(): void {
   } else {
     // Only warn once per session to avoid spam
     if (typeof window !== "undefined" && !(window as unknown as Record<string, unknown>).__metricsWarned) {
-      console.warn("[Metrics] NEXT_PUBLIC_METRICS_ENDPOINT not configured. Metrics collection is disabled. Set NEXT_PUBLIC_METRICS_ENDPOINT in your environment to enable metrics tracking.")
+      logger.warn("NEXT_PUBLIC_METRICS_ENDPOINT is not configured; metrics collection is disabled")
       ;(window as unknown as Record<string, unknown>).__metricsWarned = true
     }
   }
@@ -169,22 +172,31 @@ export function initMonitoring(): void {
   if (typeof window === "undefined") return
   startFlushTimer()
   flushMetricsOnUnload()
+  attachLogFlushListeners()
 
   const pagePath = window.location.pathname
   recordMetric("page.view", 1, { path: pagePath })
 
   window.addEventListener("error", (event) => {
-    Sentry.captureException(event.error ?? event.message)
+    const rawError = event.error ?? event.message
+    const safeError = rawError instanceof Error
+      ? { ...rawError, message: redactString(rawError.message), stack: rawError.stack ? redactString(rawError.stack) : undefined }
+      : (typeof rawError === "string" ? redactString(rawError) : rawError)
+    Sentry.captureException(safeError)
     recordMetric("error.unhandled", 1, {
-      message: event.message,
+      message: redactString(event.message),
       source: event.filename || "unknown",
     })
   })
 
   window.addEventListener("unhandledrejection", (event) => {
-    Sentry.captureException(event.reason ?? event.reason?.message)
+    const rawReason = event.reason ?? event.reason?.message
+    const safeReason = rawReason instanceof Error
+      ? { ...rawReason, message: redactString(rawReason.message), stack: rawReason.stack ? redactString(rawReason.stack) : undefined }
+      : (typeof rawReason === "string" ? redactString(rawReason) : rawReason)
+    Sentry.captureException(safeReason)
     recordMetric("error.unhandled", 1, {
-      message: event.reason?.message || String(event.reason),
+      message: redactString(event.reason?.message || String(event.reason)),
       source: "unhandled-rejection",
     })
   })

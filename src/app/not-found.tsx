@@ -1,8 +1,20 @@
-"use client"
-
+import type { Metadata } from "next"
 import Link from "next/link"
-import { ArrowLeft, Home, Search } from "lucide-react"
+import { House, Search } from "lucide-react"
+import { GoBackButton } from "@/components/shared/go-back-button"
+import { buildRouteMetadata } from "@/lib/seo/route-metadata"
 
+export const metadata: Metadata = buildRouteMetadata("/404")
+
+/**
+ * Root 404 boundary.
+ *
+ * This component previously called `notFound()` inside its own body. `notFound()`
+ * *throws* `NEXT_HTTP_ERROR_FALLBACK;404`, and the nearest not-found boundary to
+ * that throw is this very component — so it re-threw into itself and the entire
+ * UI below was unreachable. A not-found boundary must render; something upstream
+ * is what calls `notFound()`.
+ */
 export default function NotFound() {
   return (
     <main className="relative min-h-screen overflow-hidden bg-background">
@@ -33,21 +45,14 @@ export default function NotFound() {
           </div>
           <nav className="mt-10 flex flex-wrap gap-x-7 gap-y-4 border-t border-dashed border-border pt-6">
             <Link href="/" className="group inline-flex items-center gap-2 font-heading text-foreground">
-              <Home className="h-4 w-4 text-aurora-violet" />
+              <House className="h-4 w-4 text-aurora-violet" />
               <span className="border-b border-transparent group-hover:border-aurora-violet">Go home</span>
             </Link>
             <Link href="/docs" className="group inline-flex items-center gap-2 font-heading text-muted-foreground hover:text-foreground">
               <Search className="h-4 w-4" />
               <span className="border-b border-transparent group-hover:border-foreground">Browse docs</span>
             </Link>
-            <button
-              type="button"
-              onClick={() => history.back()}
-              className="group inline-flex items-center gap-2 font-heading text-muted-foreground hover:text-foreground"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              <span className="border-b border-transparent group-hover:border-foreground">Go back</span>
-            </button>
+            <GoBackButton />
           </nav>
         </div>
       </section>

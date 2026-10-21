@@ -1,3 +1,4 @@
+import { logger } from "@/lib/logger"
 import { NextRequest, NextResponse } from "next/server"
 import { verifyRegistrationResponse } from "@simplewebauthn/server"
 import {
@@ -66,12 +67,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "verification_failed" }, { status: 400 })
     }
 
+    const userAgent = req.headers.get("user-agent") || ""
+    const deviceLabel = userAgent.length > 40 ? userAgent.substring(0, 40) + "..." : userAgent || "Unknown Device"
+
     const { credential } = verification.registrationInfo
     await storeCredential(credential.id, {
       userId: auth.user.id,
       publicKey: credential.publicKey,
       counter: credential.counter,
       transports: credential.transports as string[] | undefined,
+      deviceLabel,
     })
 
     // The Stellar secret key is derived here only to compute the public key.
@@ -89,7 +94,7 @@ export async function POST(req: NextRequest) {
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error("register error:", msg)
+    logger.error("register error:", msg)
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

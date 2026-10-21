@@ -1,3 +1,4 @@
+import { logger } from "@/lib/logger"
 import type { WalletAdapter, WalletMeta } from "./types"
 import { isPasskeyEnabled, isHardwareWalletEnabled, isWalletConnectEnabled, isExtensionWalletsEnabled } from "./features"
 
@@ -34,7 +35,7 @@ export class WalletRegistry {
       }
       const elapsed = performance.now() - start
       if (elapsed > 10) {
-        console.warn(`[WalletRegistry] ${id} detection took ${elapsed.toFixed(1)}ms (threshold: 10ms)`)
+        logger.debug(`[WalletRegistry] ${id} detection took ${elapsed.toFixed(1)}ms (threshold: 10ms)`)
       }
 
       const result: DetectionResult = {
@@ -82,9 +83,3 @@ export function getWalletRegistry(): WalletRegistry {
   }
   return _registry
 }
-
-export const walletRegistry = new Proxy({} as WalletRegistry, {
-  get(_target, prop: string | symbol) {
-    return (getWalletRegistry() as unknown as Record<string | symbol, unknown>)[prop]
-  },
-})

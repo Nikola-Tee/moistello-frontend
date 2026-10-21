@@ -1,56 +1,42 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import {
   Menu,
   X,
   Wallet,
   Bell,
-  Home,
-  PiggyBank,
-  CircleDot,
-  Users,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { formatAddress } from "@/lib/formatters";
 import { Routes } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { LocaleSwitcher } from "@/components/layout/locale-switcher";
 import { useMultiWallet } from "@/hooks/use-multi-wallet";
-import { useNotificationStore } from "@/stores/notification-store";
-import { useTranslate } from "@/lib/locale/context";
+import { useUnreadCount } from "@/hooks/use-notifications";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 interface HeaderProps {
   onToggleMobileMenu: () => void;
   isMobileMenuOpen: boolean;
 }
 
-export function Header({ onToggleMobileMenu, isMobileMenuOpen }: HeaderProps) {
-  const pathname = usePathname();
+function HeaderComponent({ onToggleMobileMenu, isMobileMenuOpen }: HeaderProps) {
   const { isConnected, address } = useMultiWallet();
-  const unreadCount = useNotificationStore((s) => s.unreadCount);
-  const { t } = useTranslate();
+  const unreadCount = useUnreadCount();
   const [showConnectModal, setShowConnectModal] = useState(false);
-
-  const navLinks: { label: string; href: string; icon: React.ReactNode }[] = [
-    { label: t("nav.dashboard"), href: Routes.DASHBOARD, icon: <Home className="h-4 w-4" /> },
-    { label: t("nav.savings"), href: "/savings", icon: <PiggyBank className="h-4 w-4" /> },
-    { label: t("nav.circles"), href: Routes.CIRCLES, icon: <CircleDot className="h-4 w-4" /> },
-    { label: t("nav.communities"), href: Routes.COMMUNITIES, icon: <Users className="h-4 w-4" /> },
-  ];
-
-  const isActive = (href: string) => {
-    if (href === Routes.DASHBOARD) return pathname === Routes.DASHBOARD;
-    return pathname.startsWith(href);
-  };
 
   return (
     <>
       <header
         className={cn(
-          "lg:hidden sticky top-3 mx-3 z-50 h-14",
+          // `top-header-safe` replaces the former `top-3`: with
+          // statusBarStyle=black-translucent the document starts underneath the
+          // iOS status bar, so the bar's existing 0.75rem offset is added to
+          // env(safe-area-inset-top) rather than standing in for it.
+          "lg:hidden sticky top-header-safe mx-3 z-50 h-14",
           "rounded-2xl",
           "glass-strong backdrop-blur-2xl",
           "border border-white/[0.06] dark:border-white/[0.08]",
@@ -65,35 +51,12 @@ export function Header({ onToggleMobileMenu, isMobileMenuOpen }: HeaderProps) {
             </Link>
           </div>
 
-          <nav className="hidden lg:flex items-center gap-0.5 absolute left-1/2 -translate-x-1/2">
-            {navLinks.map((link) => {
-              const active = isActive(link.href);
-              return (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className={cn(
-                    "relative flex items-center gap-2 px-4 py-2 text-sm font-body rounded-xl",
-                    active
-                      ? "text-foreground glass-strong bg-gradient-to-r from-aurora-violet/10 to-transparent"
-                      : "text-muted-foreground hover:text-foreground hover:glass-whisper",
-                  )}
-                >
-                  <span className="flex items-center gap-1.5">
-                    {link.icon}
-                    <span className="font-heading text-[11px] tracking-[0.15em] uppercase">
-                      {link.label}
-                    </span>
-                  </span>
-                </Link>
-              );
-            })}
-          </nav>
-
           <div className="flex items-center gap-1.5">
             <ThemeToggle />
+            <LocaleSwitcher />
 
             <button
+              type="button"
               onClick={onToggleMobileMenu}
               className={cn(
                 "inline-flex h-9 w-9 items-center justify-center rounded-xl",
@@ -102,6 +65,8 @@ export function Header({ onToggleMobileMenu, isMobileMenuOpen }: HeaderProps) {
                 "lg:hidden",
               )}
               aria-label={isMobileMenuOpen ? "Close menu" : "Open menu"}
+              aria-expanded={isMobileMenuOpen}
+              aria-controls="mobile-dashboard-menu"
             >
               {isMobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </button>
@@ -120,6 +85,7 @@ export function Header({ onToggleMobileMenu, isMobileMenuOpen }: HeaderProps) {
                 </div>
               ) : (
                 <button
+                  type="button"
                   onClick={() => setShowConnectModal(true)}
                   className={cn(
                     "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-body",
@@ -135,16 +101,15 @@ export function Header({ onToggleMobileMenu, isMobileMenuOpen }: HeaderProps) {
             </div>
 
             <div>
-              <Link href={Routes.NOTIFICATIONS} className="relative inline-flex">
+              <Link href={Routes.NOTIFICATIONS} className="relative inline-flex" aria-label={unreadCount > 0 ? `Notifications (${unreadCount} unread)` : "Notifications"}>
                 <div
                   className={cn(
                     "relative inline-flex h-9 w-9 items-center justify-center rounded-full",
                     "glass-whisper text-muted-foreground",
                     "hover:text-foreground",
                   )}
-                  aria-label="Notifications"
                 >
-                  <Bell className="h-4 w-4" />
+                  <Bell className="h-4 w-4" aria-hidden="true" />
                   {unreadCount > 0 && (
                     <span
                       className={cn(
@@ -170,8 +135,11 @@ export function Header({ onToggleMobileMenu, isMobileMenuOpen }: HeaderProps) {
   );
 }
 
+export const Header = memo(HeaderComponent);
+
 function ConnectWalletModal({ onClose }: { onClose: () => void }) {
   const { isConnecting, error, setSelectorOpen } = useMultiWallet();
+  const dialogRef = useFocusTrap<HTMLDivElement>(true, onClose);
 
   const handleConnect = () => {
     setSelectorOpen(true);
@@ -179,17 +147,31 @@ function ConnectWalletModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-md p-4"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="w-full max-w-sm rounded-2xl glass-premium p-6 depth-4">
-        <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full glass-strong">
-          <Wallet className="h-6 w-6 text-aurora-violet" />
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
+      <button
+        type="button"
+        aria-label="Close connect wallet dialog"
+        tabIndex={-1}
+        onClick={onClose}
+        className="absolute inset-0 cursor-default"
+      />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="connect-wallet-title"
+        tabIndex={-1}
+        className="relative z-10 w-full max-w-sm rounded-2xl glass-premium p-6 depth-4"
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full glass-strong" aria-hidden="true">
+            <Wallet className="h-6 w-6 text-aurora-violet" />
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close connect wallet dialog" className="rounded-full p-2 text-muted-foreground hover:text-foreground">
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
         </div>
-        <h3 className="text-lg font-heading font-bold gradient-text-extended mb-1.5">
+        <h3 id="connect-wallet-title" className="text-lg font-heading font-bold gradient-text-extended mb-1.5">
           Connect Wallet
         </h3>
         <p className="text-sm text-muted-foreground font-body mb-5">

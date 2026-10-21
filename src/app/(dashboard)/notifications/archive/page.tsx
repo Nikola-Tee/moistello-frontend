@@ -1,13 +1,13 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react"
-import Link from "next/link"
-import { ArrowLeft, BellOff, ArrowUp, ArrowDown, CircleDot, AlertTriangle, CheckCheck, UserPlus, DollarSign, Shield, Info, ChevronLeft, ChevronRight } from "lucide-react"
-import { EmptyState } from "@/components/shared/empty-state"
-import { get } from "@/lib/api-client"
-import { cn } from "@/lib/cn"
-import { formatRelativeTime } from "@/lib/formatters"
-import type { Notification } from "@/types"
+import React, { useEffect, useState } from "react";
+import Link from "next/link";
+import { ArrowLeft, BellOff, ArchiveRestore, SquareCheck, Square, Info, ArrowUp, ArrowDown, DollarSign, CircleDot, UserPlus, CheckCheck, TriangleAlert, Shield, ChevronLeft, ChevronRight } from "lucide-react";
+import { EmptyState } from "@/components/shared/empty-state";
+import { Button } from "@/components/ui/button";
+import { useNotifications } from "@/hooks/use-notifications";
+import { formatRelativeTime } from "@/lib/formatters";
+import { useUIStore } from "@/stores/ui-store";
 
 const iconMap: Record<string, React.ReactNode> = {
   contribution: <ArrowUp className="h-4 w-4" />,
@@ -18,118 +18,228 @@ const iconMap: Record<string, React.ReactNode> = {
   circle_joined: <UserPlus className="h-4 w-4" />,
   circle_completed: <CheckCheck className="h-4 w-4" />,
   system: <Info className="h-4 w-4" />,
-  warning: <AlertTriangle className="h-4 w-4" />,
+  warning: <TriangleAlert className="h-4 w-4" />,
   penalty: <Shield className="h-4 w-4" />,
-}
+};
 
-const gradientMap: Record<string, string> = {
-  contribution: "from-emerald-500/30 to-green-600/30",
-  contribution_received: "from-emerald-500/30 to-green-600/30",
-  payout: "from-aurora-indigo/30 to-aurora-violet/30",
-  payout_received: "from-aurora-indigo/30 to-aurora-violet/30",
-  circle: "from-aurora-violet/30 to-fuchsia-500/30",
-  circle_joined: "from-aurora-violet/30 to-fuchsia-500/30",
-  circle_completed: "from-aurora-violet/30 to-fuchsia-500/30",
-  system: "from-white/5 to-white/10",
-  warning: "from-red-500/30 to-amber-500/30",
-  penalty: "from-red-500/30 to-amber-500/30",
-}
-
-const iconColorMap: Record<string, string> = {
-  contribution: "text-emerald-400",
-  contribution_received: "text-emerald-400",
-  payout: "text-aurora-violet",
-  payout_received: "text-aurora-violet",
-  circle: "text-fuchsia-400",
-  circle_joined: "text-fuchsia-400",
-  circle_completed: "text-fuchsia-400",
-  system: "text-muted-foreground",
-  warning: "text-red-400",
-  penalty: "text-red-400",
-}
-
-const PAGE_SIZE = 20
+const PAGE_SIZE = 20;
 
 export default function NotificationsArchivePage() {
-  const [all, setAll] = useState<Notification[]>([])
-  const [loading, setLoading] = useState(true)
-  const [page, setPage] = useState(1)
+  const { archivedNotifications, isLoading, unarchiveNotification, bulkUnarchive } = useNotifications();
+  const { addToast } = useUIStore();
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
-    setLoading(true)
-    get(`/notifications?limit=100&page=${page}`)
-      .then((res: unknown) => {
-        const d = (res as Record<string, unknown>)?.data as Record<string, unknown> ?? res as Record<string, unknown>
-        setAll((d?.notifications ?? []) as Notification[])
-      })
-      .catch((e) => { console.warn("[notifications] Failed to load archived notifications:", e) })
-      .finally(() => setLoading(false))
-  }, [page])
+    const availableIds = new Set(archivedNotifications.map((notification) => notification.id));
+    setSelectedIds((previous) => {
+      const next = previous.filter((id) => availableIds.has(id));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [archivedNotifications]);
 
-  const archive = all.filter((n) => n.isRead)
-  const totalPages = Math.max(1, Math.ceil(archive.length / PAGE_SIZE))
-  const currentPage = Math.min(page, totalPages)
-  const pageItems = archive.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+  const totalPages = Math.max(1, Math.ceil(archivedNotifications.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageItems = archivedNotifications.slice(
+    (currentPage - 1) * PAGE_SIZE,
+    currentPage * PAGE_SIZE
+  );
+
+  const allSelected =
+    pageItems.length > 0 && pageItems.every((n) => selectedIds.includes(n.id));
+  const someSelected = pageItems.some((n) => selectedIds.includes(n.id));
+  const pageSelectionState: boolean | "mixed" = allSelected
+    ? true
+    : someSelected
+      ? "mixed"
+      : false;
+
+  const handleToggleSelectAll = () => {
+    const pageIds = new Set(pageItems.map((n) => n.id));
+    setSelectedIds((previous) => {
+      if (allSelected) return previous.filter((id) => !pageIds.has(id));
+      return Array.from(new Set([...previous, ...pageIds]));
+    });
+  };
+
+  const handleToggleSelect = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleBulkUnarchive = async () => {
+    if (selectedIds.length === 0) return;
+    try {
+      const result = await bulkUnarchive(selectedIds);
+      if (result === false) throw new Error("unarchive failed");
+      addToast({ type: "success", title: "Unarchived selected notifications" });
+      setSelectedIds([]);
+    } catch {
+      addToast({ type: "error", title: "Failed to unarchive selected" });
+    }
+  };
+
+  const handleUnarchive = async (id: string) => {
+    try {
+      const result = await unarchiveNotification(id);
+      if (result === false) throw new Error("unarchive failed");
+      addToast({ type: "success", title: "Notification unarchived" });
+    } catch {
+      addToast({ type: "error", title: "Failed to unarchive notification" });
+    }
+  };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Link href="/notifications" className="text-muted-foreground hover:text-foreground transition-colors">
-          <ArrowLeft className="h-5 w-5" />
-        </Link>
-        <div>
-          <h1 className="font-heading text-xl font-bold text-foreground">Archive</h1>
-          <p className="text-sm text-muted-foreground">Read notifications</p>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Link
+            href="/notifications"
+            className="text-muted-foreground hover:text-foreground transition-colors"
+            aria-label="Back to notifications"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </Link>
+          <div>
+            <h1 className="font-heading text-xl font-bold text-foreground">
+              Archive
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              Archived notifications
+            </p>
+          </div>
         </div>
+        {selectedIds.length > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            leftIcon={<ArchiveRestore className="h-4 w-4" />}
+            onClick={handleBulkUnarchive}
+          >
+            Unarchive Selected
+          </Button>
+        )}
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="space-y-2">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="h-16 bg-white/5 rounded-xl animate-pulse" />
           ))}
         </div>
       ) : pageItems.length === 0 ? (
-        <EmptyState icon={<BellOff className="h-6 w-6" />} title="Archive empty" description="No read notifications yet." />
+        <EmptyState
+          icon={<BellOff className="h-6 w-6" />}
+          title="Archive empty"
+          description="No archived notifications yet."
+        />
       ) : (
         <div className="border border-white/10 rounded-xl overflow-hidden divide-y divide-white/[0.06]">
+          <div className="flex items-center gap-3 px-5 py-3 bg-white/[0.02] border-b border-white/10">
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={pageSelectionState}
+              aria-label={allSelected ? "Deselect archived notifications on this page" : "Select archived notifications on this page"}
+              onClick={handleToggleSelectAll}
+              className="shrink-0 rounded text-muted-foreground hover:text-foreground"
+            >
+              {allSelected ? (
+                <SquareCheck className="h-4 w-4 text-aurora-violet" />
+              ) : (
+                <Square className="h-4 w-4" />
+              )}
+            </button>
+            <span className="text-xs font-medium text-muted-foreground">
+              {allSelected ? "Deselect all on this page" : "Select all on this page"}
+            </span>
+          </div>
+
           {pageItems.map((n) => {
-            const icon = iconMap[n.type] ?? <Info className="h-4 w-4" />
-            const grad = gradientMap[n.type] ?? gradientMap.system
-            const icol = iconColorMap[n.type] ?? iconColorMap.system
+            const icon = iconMap[n.type] ?? <Info className="h-4 w-4" />;
+            const selected = selectedIds.includes(n.id);
             return (
-              <div key={n.id} className="flex items-start gap-4 px-5 py-4">
-                <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br", grad)}>
-                  <span className={icol}>{icon}</span>
+              <div
+                key={n.id}
+                className="flex items-center justify-between px-5 py-4 hover:glass-whisper"
+              >
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={selected}
+                    aria-label={`${selected ? "Deselect" : "Select"} ${n.title}`}
+                    onClick={() => handleToggleSelect(n.id)}
+                    className="shrink-0 rounded text-muted-foreground hover:text-foreground"
+                  >
+                    {selected ? (
+                      <SquareCheck className="h-4 w-4 text-aurora-violet" />
+                    ) : (
+                      <Square className="h-4 w-4" />
+                    )}
+                  </button>
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/5 text-muted-foreground">
+                    {icon}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-foreground">
+                      {n.title}
+                    </p>
+                    {n.body && (
+                      <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                        {n.body}
+                      </p>
+                    )}
+                    <p className="text-xs text-muted-foreground/40 mt-1">
+                      {n.sentAt
+                        ? formatRelativeTime(n.sentAt)
+                        : formatRelativeTime(n.createdAt)}
+                    </p>
+                  </div>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-muted-foreground">{n.title}</p>
-                  {n.body && <p className="text-xs text-muted-foreground/60 mt-0.5 line-clamp-2">{n.body}</p>}
-                  <p className="text-xs text-muted-foreground/40 mt-1">
-                    {n.sentAt ? formatRelativeTime(n.sentAt) : formatRelativeTime(n.createdAt)}
-                  </p>
-                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void handleUnarchive(n.id)}
+                  leftIcon={<ArchiveRestore className="h-4 w-4" />}
+                >
+                  Unarchive
+                </Button>
               </div>
-            )
+            );
           })}
         </div>
       )}
-
       {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-3">
-          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors">
-            <ChevronLeft className="h-3.5 w-3.5" /> Previous
-          </button>
-          <span className="text-xs text-muted-foreground">{currentPage} / {totalPages}</span>
-          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors">
-            Next <ChevronRight className="h-3.5 w-3.5" />
-          </button>
-        </div>
+        <nav className="flex items-center justify-between border-t border-white/10 pt-4" aria-label="Archived notification pages">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={currentPage <= 1}
+            onClick={() => setPage((page) => Math.max(1, page - 1))}
+            aria-label="Previous archived notifications page"
+          >
+            <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+            Previous
+          </Button>
+          <span className="text-xs text-muted-foreground" aria-live="polite">
+            Page {currentPage} of {totalPages}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={currentPage >= totalPages}
+            onClick={() => setPage((page) => Math.min(totalPages, page + 1))}
+            aria-label="Next archived notifications page"
+          >
+            Next
+            <ChevronRight className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </nav>
       )}
-
-      <Link href="/notifications" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
-        <ArrowLeft className="h-3.5 w-3.5" /> Back to Notifications
-      </Link>
     </div>
-  )
+  );
 }

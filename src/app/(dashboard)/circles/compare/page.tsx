@@ -6,9 +6,11 @@ import { PageHeader } from "@/components/shared/page-header"
 import { EmptyState } from "@/components/shared/empty-state"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { TableScrollRegion } from "@/components/shared/table-scroll-region"
+import { TableCaption, TableCell, TableHeadCell, TableRow } from "@/components/shared/responsive-table"
 import { useCircle } from "@/hooks/use-circles"
 import { formatCurrency } from "@/lib/formatters"
-import { Search, X, BarChart3 } from "lucide-react"
+import { Search, X, ChartColumn } from "lucide-react"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const ATTRIBUTES: { key: string; label: string; format: (v: any, c?: any) => string }[] = [
@@ -28,7 +30,7 @@ function CircleCompareChip({ id, onRemove }: { id: string; onRemove: (id: string
   const { data: circle } = useCircle(id)
   return (
     <div className="glass-premium rounded-xl p-4 holo-border relative">
-      <button onClick={() => onRemove(id)} className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-red-500/20 text-red-400 hover:bg-red-500/30 flex items-center justify-center"><X className="h-3 w-3" /></button>
+      <button type="button" onClick={() => onRemove(id)} className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-red-500/20 text-red-400 hover:bg-red-500/30 flex items-center justify-center" aria-label={`Remove circle ${id} from comparison`}><X className="h-3 w-3" aria-hidden="true" /></button>
       <Link href={`/circles/${id}`} className="font-heading font-semibold text-foreground dark:text-white text-sm hover:underline block truncate">{circle?.name ?? "Loading..."}</Link>
       <p className="text-2xs text-muted-foreground capitalize">{circle ? `${circle.circleType} · ${circle.status}` : ""}</p>
     </div>
@@ -80,37 +82,52 @@ export default function ComparePage() {
 
       {circleIds.length === 0 ? (
         <EmptyState
-          icon={<BarChart3 className="h-6 w-6" />}
+          icon={<ChartColumn className="h-6 w-6" />}
           title="Add circles to compare"
           description="Paste circle IDs above to compare attributes side-by-side. You can compare up to 4 circles."
         />
       ) : (
-        <div className="overflow-x-auto rounded-2xl border border-border">
+        <TableScrollRegion
+          label="Circle comparison table"
+          className="rounded-xl border border-border"
+        >
           <table className="w-full text-sm">
+            <TableCaption>Circle attributes side by side.</TableCaption>
             <thead>
-              <tr className="glass-strong border-b border-border">
-                <th className="px-4 py-3 text-left text-2xs font-heading tracking-wider uppercase text-muted-foreground w-48 sticky left-0 bg-[var(--bg-card)]">Attribute</th>
-                {circleIds.map((id) => (
-                  <th key={id} className="px-4 py-3 text-center text-2xs font-heading tracking-wider uppercase text-muted-foreground">
-                    <Link href={`/circles/${id}`} className="hover:text-foreground transition-colors">Circle {circleIds.indexOf(id) + 1}</Link>
-                  </th>
+              <tr className="border-b border-border">
+                <TableHeadCell label="Attribute" className="w-48 text-left sm:sticky sm:left-0 sm:z-10 sm:bg-background">
+                  Attribute
+                </TableHeadCell>
+                {circleIds.map((id, index) => (
+                  <TableHeadCell key={id} label={`Circle ${index + 1}`} className="text-center">
+                    {/* Hidden below `sm`, where the header strip is clipped; the
+                        chip grid above stays visible and carries the same links. */}
+                    <Link
+                      href={`/circles/${id}`}
+                      className="hover:text-foreground hidden transition-colors sm:inline"
+                    >
+                      Circle {index + 1}
+                    </Link>
+                  </TableHeadCell>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {ATTRIBUTES.map((attr) => {
-                return (
-                  <tr key={attr.key} className="border-b border-border hover:glass-whisper transition-colors">
-                    <td className="px-4 py-3 text-sm font-heading font-medium text-muted-foreground w-48 sticky left-0 bg-[var(--bg-card)] z-10">{attr.label}</td>
-                    {circleIds.map((id) => {
-                      return <td key={id} className="px-4 py-3 text-sm text-center"><CircleAttrValue circleId={id} attr={attr} /></td>
-                    })}
-                  </tr>
-                )
-              })}
+              {ATTRIBUTES.map((attr) => (
+                <TableRow key={attr.key} className="transition-colors hover:bg-white/[0.03]">
+                  <TableCell label="Attribute" primary className="w-48 font-heading font-medium text-muted-foreground sm:sticky sm:left-0 sm:z-10 sm:bg-background">
+                    {attr.label}
+                  </TableCell>
+                  {circleIds.map((id, index) => (
+                    <TableCell key={id} label={`Circle ${index + 1}`} className="text-center">
+                      <CircleAttrValue circleId={id} attr={attr} />
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
             </tbody>
           </table>
-        </div>
+        </TableScrollRegion>
       )}
     </div>
   )

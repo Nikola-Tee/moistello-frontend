@@ -1,8 +1,9 @@
 "use client"
 
+import { logger } from "@/lib/logger"
 import { useState, useCallback, useEffect } from "react"
 import Link from "next/link"
-import { ArrowLeft, Monitor, Smartphone, Globe, Clock, Shield } from "lucide-react"
+import { ArrowLeft, Monitor, Smartphone, Globe, Clock, Shield, Key } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { get, del, patch } from "@/lib/api-client"
 import { useTranslate } from "@/lib/locale/context"
@@ -13,6 +14,12 @@ interface SessionInfo {
   deviceInfo: string
   lastActive: string
   isCurrent: boolean
+}
+
+interface PasskeyInfo {
+  credentialId: string
+  deviceLabel: string
+  createdAt: string
 }
 
 function DeviceIcon({ deviceInfo }: { deviceInfo: string }) {
@@ -46,6 +53,10 @@ export default function SessionsSettingsPage() {
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [loadingSessions, setLoadingSessions] = useState(true)
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null)
+  
+  const [passkeys, setPasskeys] = useState<PasskeyInfo[]>([])
+  const [loadingPasskeys, setLoadingPasskeys] = useState(true)
+  const [confirmRevokePasskey, setConfirmRevokePasskey] = useState<string | null>(null)
 
   useEffect(() => {
     if (user?.sessionTtlMinutes) setSessionTTL(user.sessionTtlMinutes)
@@ -56,7 +67,13 @@ export default function SessionsSettingsPage() {
       const body = (res as Record<string, unknown>)?.data as Record<string, unknown> ?? res
       setSessions((body?.sessions ?? []) as SessionInfo[])
       setLoadingSessions(false)
-    }).catch((e) => { console.warn("[sessions] Failed to load sessions:", e); setLoadingSessions(false) })
+    }).catch((e) => { logger.warn("[sessions] Failed to load sessions:", e); setLoadingSessions(false) })
+
+    get<{ data?: { passkeys?: PasskeyInfo[] } }>("/auth/passkeys").then((res) => {
+      const body = (res as Record<string, unknown>)?.data as Record<string, unknown> ?? res
+      setPasskeys((body?.passkeys ?? []) as PasskeyInfo[])
+      setLoadingPasskeys(false)
+    }).catch((e) => { logger.warn("[sessions] Failed to load passkeys:", e); setLoadingPasskeys(false) })
   }, [])
 
   const handleSaveTTL = useCallback(async () => {
@@ -66,7 +83,7 @@ export default function SessionsSettingsPage() {
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } catch (e) {
-      console.error("[sessions] Failed to save session TTL:", e)
+      logger.error("[sessions] Failed to save session TTL:", e)
     }
     setSaving(false)
   }, [sessionTTL])
@@ -76,7 +93,7 @@ export default function SessionsSettingsPage() {
       await del(`/sessions/${sessionId}`)
       setSessions((prev) => prev.filter((s) => s.id !== sessionId))
     } catch (e) {
-      console.error("[sessions] Failed to revoke session:", e)
+      logger.error("[sessions] Failed to revoke session:", e)
     }
     setConfirmRevoke(null)
   }, [])
@@ -86,14 +103,24 @@ export default function SessionsSettingsPage() {
       await del("/sessions")
       setSessions((prev) => prev.filter((s) => s.isCurrent))
     } catch (e) {
-      console.error("[sessions] Failed to revoke all sessions:", e)
+      logger.error("[sessions] Failed to revoke all sessions:", e)
     }
+  }, [])
+
+  const handleRevokePasskey = useCallback(async (credentialId: string) => {
+    try {
+      await del(`/auth/passkeys/${credentialId}`)
+      setPasskeys((prev) => prev.filter((p) => p.credentialId !== credentialId))
+    } catch (e) {
+      logger.error("[sessions] Failed to revoke passkey:", e)
+    }
+    setConfirmRevokePasskey(null)
   }, [])
 
   return (
     <div className="max-w-lg mx-auto space-y-6">
       <div className="flex items-center gap-3">
-        <Link href="/settings" className="text-muted-foreground hover:text-foreground transition-colors">
+        <Link href="/settings" className="text-muted-foreground hover:text-foreground transition-colors" aria-label="Back to settings">
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <div>
@@ -116,15 +143,15 @@ export default function SessionsSettingsPage() {
             <span className="font-heading font-semibold text-foreground">{Math.round(sessionTTL / 60)}h {sessionTTL % 60}m</span>
             <span className="text-muted-foreground">{t("session.twentyFourHours")}</span>
           </div>
-          <input type="range" min={60} max={1440} step={30} value={sessionTTL}
+          <input aria-label="Session time-to-live" type="range" min={60} max={1440} step={30} value={sessionTTL}
             onChange={(e) => setSessionTTL(Number(e.target.value))}
             className="w-full accent-aurora-violet h-2 rounded-full appearance-none bg-white/10 cursor-pointer" />
           <div className="flex justify-between text-2xs text-muted-foreground">
-            <button type="button" onClick={() => setSessionTTL(60)} className="hover:text-foreground">1h</button>
-            <button type="button" onClick={() => setSessionTTL(240)} className="hover:text-foreground">4h</button>
-            <button type="button" onClick={() => setSessionTTL(480)} className="hover:text-foreground">8h</button>
-            <button type="button" onClick={() => setSessionTTL(720)} className="hover:text-foreground">12h</button>
-            <button type="button" onClick={() => setSessionTTL(1440)} className="hover:text-foreground">24h</button>
+            <button type="button" aria-pressed={sessionTTL === 60} onClick={() => setSessionTTL(60)} className="hover:text-foreground">1h</button>
+            <button type="button" aria-pressed={sessionTTL === 240} onClick={() => setSessionTTL(240)} className="hover:text-foreground">4h</button>
+            <button type="button" aria-pressed={sessionTTL === 480} onClick={() => setSessionTTL(480)} className="hover:text-foreground">8h</button>
+            <button type="button" aria-pressed={sessionTTL === 720} onClick={() => setSessionTTL(720)} className="hover:text-foreground">12h</button>
+            <button type="button" aria-pressed={sessionTTL === 1440} onClick={() => setSessionTTL(1440)} className="hover:text-foreground">24h</button>
           </div>
         </div>
         <div className="flex items-center justify-end gap-3 pt-2">
@@ -184,6 +211,63 @@ export default function SessionsSettingsPage() {
                         </div>
                       ) : (
                         <Button variant="outline" size="xs" onClick={() => setConfirmRevoke(session.id)} className="h-7 text-xs text-red-400">{t("session.revoke")}</Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="glass-premium rounded-2xl p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Key className="h-4 w-4 text-aurora-violet" />
+            <h3 className="font-heading text-sm font-semibold text-foreground">Passkeys</h3>
+          </div>
+          <Link href="/passkey-setup">
+            <Button variant="outline" size="xs" className="h-7 text-xs">
+              Add Passkey
+            </Button>
+          </Link>
+        </div>
+
+        {loadingPasskeys ? (
+          <div className="space-y-3">
+            {[1, 2].map((n) => <div key={n} className="h-16 bg-white/5 rounded-xl animate-pulse" />)}
+          </div>
+        ) : passkeys.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-4">No passkeys registered</p>
+        ) : (
+          <div className="space-y-2">
+            {passkeys.map((passkey) => {
+              const isLastPasskey = passkeys.length === 1
+              return (
+                <div key={passkey.credentialId}
+                  className={`rounded-xl p-4 transition-all glass-whisper ${confirmRevokePasskey === passkey.credentialId ? "ring-2 ring-red-500/30" : ""}`}>
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-aurora-violet/20 to-aurora-indigo/20 shrink-0">
+                      <Key className="h-5 w-5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium text-foreground truncate">{passkey.deviceLabel}</p>
+                      </div>
+                      <p className="text-xs text-muted-foreground font-mono">Created {new Date(passkey.createdAt).toLocaleDateString()}</p>
+                    </div>
+                    <div className="shrink-0">
+                      {confirmRevokePasskey === passkey.credentialId ? (
+                        <div className="flex flex-col items-end gap-2">
+                          {isLastPasskey && <p className="text-xs text-red-400 font-medium max-w-[200px] text-right">This is your last passkey. You won't be able to login with biometric authentication.</p>}
+                          <div className="flex gap-1">
+                            <Button variant="destructive" size="xs" onClick={() => handleRevokePasskey(passkey.credentialId)} className="h-7 text-xs">{t("session.confirm")}</Button>
+                            <Button variant="outline" size="xs" onClick={() => setConfirmRevokePasskey(null)} className="h-7 text-xs">{t("session.keep")}</Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <Button variant="outline" size="xs" onClick={() => setConfirmRevokePasskey(passkey.credentialId)} className="h-7 text-xs text-red-400">{t("session.revoke")}</Button>
                       )}
                     </div>
                   </div>

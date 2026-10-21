@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useUIStore } from "@/stores/ui-store";
+import { useUIStore, clearToastDeduplication } from "@/stores/ui-store";
 
 describe("useUIStore", () => {
   beforeEach(() => {
+    clearToastDeduplication();
     useUIStore.setState({
       theme: "system",
       density: "comfortable",
       fontSize: "medium",
       sidebarOpen: false,
-      activeModal: null,
       toasts: [],
     });
   });
@@ -61,29 +61,6 @@ describe("useUIStore", () => {
 
       useUIStore.getState().setTheme("system");
       expect(useUIStore.getState().theme).toBe("system");
-    });
-  });
-
-  describe("modal", () => {
-    it("starts with no active modal", () => {
-      expect(useUIStore.getState().activeModal).toBeNull();
-    });
-
-    it("opens a modal by id", () => {
-      useUIStore.getState().openModal("settings");
-      expect(useUIStore.getState().activeModal).toBe("settings");
-    });
-
-    it("closes the active modal", () => {
-      useUIStore.getState().openModal("settings");
-      useUIStore.getState().closeModal();
-      expect(useUIStore.getState().activeModal).toBeNull();
-    });
-
-    it("replaces modal when opening another", () => {
-      useUIStore.getState().openModal("settings");
-      useUIStore.getState().openModal("profile");
-      expect(useUIStore.getState().activeModal).toBe("profile");
     });
   });
 
@@ -192,6 +169,152 @@ describe("useUIStore", () => {
 
       vi.advanceTimersByTime(1000);
       expect(useUIStore.getState().toasts).toEqual([]);
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it("generates unique ids for toasts added in the same millisecond", () => {
+      vi.useFakeTimers();
+      vi.spyOn(Date, "now").mockReturnValue(1000);
+
+      useUIStore.getState().addToast({ type: "info", title: "One" });
+      useUIStore.getState().addToast({ type: "info", title: "Two" });
+
+      const ids = useUIStore.getState().toasts.map((t) => t.id);
+      expect(ids[0]).not.toBe(ids[1]);
+      expect(ids[0]).toMatch(/^toast-1000-\d+$/);
+      expect(ids[1]).toMatch(/^toast-1000-\d+$/);
+
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it("cancels the auto-dismiss timer when a toast is removed manually", () => {
+      vi.useFakeTimers();
+      vi.spyOn(Date, "now").mockReturnValue(1000);
+
+      useUIStore.getState().addToast({
+        type: "warning",
+        title: "Manual",
+        duration: 5000,
+      });
+
+      const toastId = useUIStore.getState().toasts[0].id;
+      useUIStore.getState().removeToast(toastId);
+
+      // Manual dismissal clears the pending timer entirely.
+      expect(vi.getTimerCount()).toBe(0);
+
+      // Advancing time must not resurrect or error on the removed toast.
+      vi.advanceTimersByTime(10000);
+      expect(useUIStore.getState().toasts).toEqual([]);
+
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it("leaves a pending timer behind for toasts that are still visible", () => {
+      vi.useFakeTimers();
+      vi.spyOn(Date, "now").mockReturnValue(1000);
+
+      useUIStore.getState().addToast({
+        type: "info",
+        title: "Visible",
+        duration: 5000,
+      });
+
+      expect(vi.getTimerCount()).toBe(1);
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it("caps stacked toasts so the corner never overflows", () => {
+      vi.useFakeTimers();
+      vi.spyOn(Date, "now").mockReturnValue(1000);
+
+      for (let i = 0; i < 8; i++) {
+        useUIStore.getState().addToast({
+          type: "info",
+          title: `Toast ${i}`,
+          duration: 60000,
+        });
+      }
+
+      const toasts = useUIStore.getState().toasts;
+      expect(toasts).toHaveLength(5);
+      expect(toasts[0].title).toBe("Toast 3");
+      expect(toasts[4].title).toBe("Toast 7");
+
+      // Evicted toasts must not leave orphaned dismiss timers behind.
+      expect(vi.getTimerCount()).toBe(5);
+
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it("deduplicates identical toasts added within 5000ms", () => {
+      vi.useFakeTimers();
+      vi.spyOn(Date, "now").mockReturnValue(1000);
+
+      // First call adds toast
+      useUIStore.getState().addToast({
+        type: "error",
+        title: "Query Failed",
+        description: "Network error",
+      });
+      expect(useUIStore.getState().toasts).toHaveLength(1);
+
+      // Parallel/duplicate call within 5000ms is ignored
+      useUIStore.getState().addToast({
+        type: "error",
+        title: "Query Failed",
+        description: "Network error",
+      });
+      expect(useUIStore.getState().toasts).toHaveLength(1);
+
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it("allows different toasts to be added within 5000ms", () => {
+      vi.useFakeTimers();
+      vi.spyOn(Date, "now").mockReturnValue(1000);
+
+      useUIStore.getState().addToast({
+        type: "error",
+        title: "Error A",
+      });
+      useUIStore.getState().addToast({
+        type: "error",
+        title: "Error B",
+      });
+
+      expect(useUIStore.getState().toasts).toHaveLength(2);
+
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it("allows identical toasts to be added again after 5000ms", () => {
+      vi.useFakeTimers();
+      vi.spyOn(Date, "now").mockReturnValue(1000);
+
+      useUIStore.getState().addToast({
+        type: "error",
+        title: "Timeout",
+      });
+      expect(useUIStore.getState().toasts).toHaveLength(1);
+
+      // Advance past 5000ms deduplication window
+      vi.spyOn(Date, "now").mockReturnValue(6500);
+
+      useUIStore.getState().addToast({
+        type: "error",
+        title: "Timeout",
+      });
+
+      expect(useUIStore.getState().toasts).toHaveLength(2);
+
       vi.useRealTimers();
       vi.restoreAllMocks();
     });

@@ -1,19 +1,26 @@
 "use client"
 
+import { logger } from "@/lib/logger"
 import { useState, useEffect } from "react"
 import Link from "next/link"
 import { ArrowUpRight, ArrowDownRight, ArrowDownLeft, Wallet as WalletIcon, Settings, Clock, ArrowRight, ListOrdered, BookCopy, ExternalLink, QrCode, Copy, Check } from "lucide-react"
 import { PageHeader } from "@/components/shared/page-header"
 import { CopyButton } from "@/components/shared/copy-button"
-import { Button } from "@/components/ui/button"
-import { WalletSettings } from "@/components/wallet/wallet-settings"
+import dynamic from "next/dynamic"
+import { Button, ButtonLink } from "@/components/ui/button"
+
+const WalletSettings = dynamic(
+  () => import("@/components/wallet/wallet-settings").then((m) => m.WalletSettings),
+  { ssr: false }
+)
 import { get } from "@/lib/api-client"
 import { useTranslate } from "@/lib/locale/context"
-import { formatAddress } from "@/lib/formatters"
+import { formatAddress, DEFAULT_LOCALE } from "@/lib/formatters"
 import { cn } from "@/lib/cn"
 import { useMultiWallet } from "@/hooks/use-multi-wallet"
 import { useUIStore } from "@/stores/ui-store"
 import { copyToClipboard } from "@/lib/clipboard"
+import { useFocusTrap } from "@/hooks/use-focus-trap"
 
 interface BalanceInfo {
   xlm: string
@@ -32,7 +39,7 @@ interface TransactionItem {
 const STELLAR_EXPLORER_TX = "https://stellar.expert/explorer/testnet/tx"
 
 export default function WalletPage() {
-  const { t } = useTranslate()
+  const { t, locale } = useTranslate()
   const { address, activeWalletId, wallets } = useMultiWallet()
   const [balance, setBalance] = useState<BalanceInfo | null>(null)
   const [transactions, setTransactions] = useState<TransactionItem[]>([])
@@ -41,6 +48,8 @@ export default function WalletPage() {
   const [copied, setCopied] = useState(false)
   const [wallet, setWallet] = useState<{ publicKey: string } | null>(null)
   const addToast = useUIStore((s) => s.addToast)
+  const isReceiveDialogOpen = showReceive && wallet !== null
+  const receiveDialogRef = useFocusTrap<HTMLDivElement>(isReceiveDialogOpen, () => setShowReceive(false))
 
   useEffect(() => {
     async function load() {
@@ -79,7 +88,7 @@ export default function WalletPage() {
         all.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         setTransactions(all.slice(0, 10))
       } catch (e) {
-        console.error("[wallet] Failed to load wallet data:", e)
+        logger.error("[wallet] Failed to load wallet data:", e)
       } finally {
         setLoading(false)
       }
@@ -113,15 +122,29 @@ export default function WalletPage() {
       <PageHeader title="Wallet" description="Manage your Stellar wallet." />
 
       {/* Receive modal */}
-      {showReceive && wallet && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setShowReceive(false)}>
-          <div className="w-full max-w-sm rounded-2xl bg-[rgb(var(--background))] border border-white/15 p-6 space-y-5" onClick={(e) => e.stopPropagation()}>
+      {isReceiveDialogOpen && wallet && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <button
+            type="button"
+            aria-label="Close receive wallet dialog"
+            tabIndex={-1}
+            onClick={() => setShowReceive(false)}
+            className="absolute inset-0 cursor-default"
+          />
+          <div
+            ref={receiveDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="receive-wallet-title"
+            tabIndex={-1}
+            className="relative z-10 w-full max-w-sm rounded-2xl bg-[rgb(var(--background))] border border-white/15 p-6 space-y-5"
+          >
             <div className="flex items-center justify-between">
-              <h3 className="font-heading text-base font-semibold text-foreground">Receive</h3>
-              <button onClick={() => setShowReceive(false)} className="h-7 w-7 flex items-center justify-center rounded-lg bg-white/10 text-muted-foreground hover:text-foreground text-sm">✕</button>
+              <h3 id="receive-wallet-title" className="font-heading text-base font-semibold text-foreground">Receive</h3>
+              <button type="button" aria-label="Close receive wallet dialog" onClick={() => setShowReceive(false)} className="h-7 w-7 flex items-center justify-center rounded-lg bg-white/10 text-muted-foreground hover:text-foreground text-sm">✕</button>
             </div>
             <div className="inline-flex items-center justify-center w-40 h-40 bg-white rounded-xl mx-auto">
-              <QrCode className="h-16 w-16 text-black/80" />
+              <QrCode aria-hidden="true" className="h-16 w-16 text-black/80" />
             </div>
             <div className="bg-white/5 rounded-xl px-4 py-3">
               <code className="text-sm font-mono text-foreground break-all">{wallet.publicKey}</code>
@@ -154,7 +177,21 @@ export default function WalletPage() {
                 </span>
               </div>
               <div className="flex items-center gap-2 mt-2">
-                <CopyButton text={walletId} label={formatAddress(walletId)} />
+                <CopyButton
+                  text={walletId}
+                  label={formatAddress(walletId)}
+                  // The visible label is the truncated form, so the full
+                  // address is surfaced via the tooltip, the accessible name,
+                  // and the manual-copy fallback.
+                  fullText={walletId}
+                  onCopied={() => addToast({ type: "info", title: "Address copied" })}
+                  onError={() =>
+                    addToast({
+                      type: "error",
+                      title: "Clipboard unavailable",
+                      description: "Select the address and copy it manually.",
+                    })}
+                />
               </div>
               <p className="text-xs text-muted-foreground mt-1.5">
                 {t("auth.register.securityNote")}
@@ -172,7 +209,7 @@ export default function WalletPage() {
           <div className="absolute -top-6 -right-6 w-24 h-24 rounded-full bg-aurora-violet/5 blur-2xl pointer-events-none" />
           <p className="text-xs font-heading font-medium text-muted-foreground uppercase tracking-wider mb-1">XLM</p>
           <p className="text-3xl font-bold font-heading text-foreground">
-            {loading ? <span className="inline-block w-24 h-8 bg-white/10 rounded animate-pulse align-middle" /> : formatBalance(balance?.xlm)}
+            {loading ? <span className="inline-block w-24 h-8 bg-white/10 rounded animate-pulse align-middle" /> : formatBalance(balance?.xlm, locale)}
           </p>
           <p className="text-xs text-muted-foreground mt-0.5">Stellar Lumens</p>
         </div>
@@ -180,7 +217,7 @@ export default function WalletPage() {
           <div className="absolute -top-6 -right-6 w-24 h-24 rounded-full bg-emerald-500/5 blur-2xl pointer-events-none" />
           <p className="text-xs font-heading font-medium text-muted-foreground uppercase tracking-wider mb-1">USDC</p>
           <p className="text-3xl font-bold font-heading text-foreground">
-            {loading ? <span className="inline-block w-24 h-8 bg-white/10 rounded animate-pulse align-middle" /> : formatBalance(balance?.usdc)}
+            {loading ? <span className="inline-block w-24 h-8 bg-white/10 rounded animate-pulse align-middle" /> : formatBalance(balance?.usdc, locale)}
           </p>
           <p className="text-xs text-muted-foreground mt-0.5">USD Coin</p>
         </div>
@@ -191,21 +228,15 @@ export default function WalletPage() {
         <Button variant="primary" size="md" onClick={() => setShowReceive(true)} leftIcon={<ArrowDownRight className="h-4 w-4" />}>
           Receive
         </Button>
-        <Link href="/wallet/deposit">
-          <Button variant="outline" size="md" leftIcon={<ArrowDownLeft className="h-4 w-4" />}>
-            Deposit
-          </Button>
-        </Link>
-        <Link href="/wallet/withdraw">
-          <Button variant="outline" size="md" leftIcon={<ArrowUpRight className="h-4 w-4" />}>
-            Withdraw
-          </Button>
-        </Link>
-        <Link href="/wallet/settings">
-          <Button variant="outline" size="md" leftIcon={<Settings className="h-4 w-4" />}>
-            Settings
-          </Button>
-        </Link>
+        <ButtonLink href="/wallet/deposit" variant="outline" size="md" leftIcon={<ArrowDownLeft className="h-4 w-4" />}>
+          Deposit
+        </ButtonLink>
+        <ButtonLink href="/wallet/withdraw" variant="outline" size="md" leftIcon={<ArrowUpRight className="h-4 w-4" />}>
+          Withdraw
+        </ButtonLink>
+        <ButtonLink href="/wallet/settings" variant="outline" size="md" leftIcon={<Settings className="h-4 w-4" />}>
+          Settings
+        </ButtonLink>
       </div>
 
       {/* Recent Transactions — timeline style */}
@@ -250,7 +281,7 @@ export default function WalletPage() {
                     <div className="min-w-0">
                       <p className="text-sm text-foreground truncate">{tx.description}</p>
                       <p className="text-xs text-muted-foreground">
-                        {new Date(tx.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                        {new Date(tx.createdAt).toLocaleDateString(locale || DEFAULT_LOCALE, { month: "short", day: "numeric" })}
                       </p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -258,7 +289,7 @@ export default function WalletPage() {
                         "text-sm font-semibold font-heading whitespace-nowrap",
                         tx.type === "received" ? "text-emerald-400" : "text-muted-foreground",
                       )}>
-                        {tx.type === "received" ? "+" : "-"}{formatAmount(tx.amount)} USDC
+                        {tx.type === "received" ? "+" : "-"}{formatAmount(tx.amount, locale)} USDC
                       </span>
                       {tx.txnHash && (
                         <a
@@ -267,6 +298,7 @@ export default function WalletPage() {
                           rel="noopener noreferrer"
                           className="text-muted-foreground hover:text-aurora-cyan transition-colors"
                           title="View on Stellar.Expert"
+                           aria-label="View transaction on Stellar.Expert"
                         >
                           <ExternalLink className="h-3 w-3" />
                         </a>
@@ -320,13 +352,13 @@ export default function WalletPage() {
   )
 }
 
-function formatBalance(val?: string): string {
+function formatBalance(val?: string, locale: string = DEFAULT_LOCALE): string {
   if (!val) return "0.0000"
   const n = parseFloat(val)
   if (isNaN(n)) return "0.0000"
-  return n.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+  return n.toLocaleString(locale, { minimumFractionDigits: 4, maximumFractionDigits: 4 })
 }
 
-function formatAmount(val: number): string {
-  return val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+function formatAmount(val: number, locale: string = DEFAULT_LOCALE): string {
+  return val.toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }

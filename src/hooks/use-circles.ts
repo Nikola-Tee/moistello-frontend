@@ -1,8 +1,11 @@
 "use client";
 
+import { logger } from "@/lib/logger"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useOptimisticMutation, OPTIMISTIC_PENDING_USER_ID } from "./use-optimistic-mutation";
 import { get, post } from "@/lib/api-client";
 import { useUIStore } from "@/stores/ui-store";
+import { queryKeys } from "@/lib/query-keys";
 import {
   ApiResponse,
   Circle,
@@ -52,6 +55,13 @@ interface CreateCirclePayload {
 
 interface JoinCirclePayload {
   userId?: string;
+  /**
+   * Required to join a private circle. This was missing from the type, so
+   * `circles/[id]/page.tsx` had to cast the payload to `Record<string, unknown>`
+   * to send it — which meant nothing checked the field, and nothing could type
+   * it in a test.
+   */
+  inviteCode?: string;
 }
 
 interface ContributePayload {
@@ -59,14 +69,24 @@ interface ContributePayload {
   roundNumber?: number;
 }
 
+/**
+ * Row this hook appends to the rounds cache while a contribution is in flight.
+ *
+ * The rounds endpoint serves `CircleRound`s, but the pending row is the
+ * contribution itself (that is what the server echoes back on success), and it
+ * is stamped with `submittedAt` rather than `createdAt` — hence the cache is
+ * read and written as the union of the two.
+ */
+type OptimisticRoundRow = Omit<Contribution, "createdAt"> & {
+  submittedAt: string;
+};
+
 function normalizeCircle(c: Record<string, unknown>): Circle {
   const out: Record<string, unknown> = {}
   for (const [key, val] of Object.entries(c)) {
-    // Convert sql.NullString {String, Valid} → raw string or null
     if (val && typeof val === "object" && "Valid" in val && "String" in val) {
       out[key] = (val as { String: string }).String || null
     } else if (val && typeof val === "object" && "Valid" in val && "Time" in val) {
-      // Convert sql.NullTime {Time, Valid} → ISO string or null
       out[key] = (val as { Time: string }).Time || null
     } else {
       out[key] = val
@@ -77,7 +97,7 @@ function normalizeCircle(c: Record<string, unknown>): Circle {
 
 export function useCircles(filters?: CircleFilters) {
   return useQuery({
-    queryKey: ["circles", filters],
+    queryKey: queryKeys.circles.list(filters),
     queryFn: async () => {
       const params = new URLSearchParams();
       if (filters?.search) params.set("search", filters.search);
@@ -110,13 +130,35 @@ export function useCircles(filters?: CircleFilters) {
 
 export function useCircle(id: string) {
   return useQuery({
-    queryKey: ["circle", id],
+    queryKey: queryKeys.circles.detail(id),
     queryFn: async () => {
       const response = await get<ApiResponse<{ circle: Circle }>>(`/circles/${id}`);
       const raw = response.data?.circle
       return raw ? normalizeCircle(raw as unknown as Record<string, unknown>) : null;
     },
     enabled: !!id,
+  });
+}
+
+export function useCircleMembers(circleId: string) {
+  return useQuery({
+    queryKey: queryKeys.circles.members(circleId),
+    queryFn: async () => {
+      const response = await get<ApiResponse<{ members: CircleMember[] }>>(`/circles/${circleId}/members`);
+      return response.data?.members ?? [];
+    },
+    enabled: !!circleId,
+  });
+}
+
+export function useCircleRounds(circleId: string) {
+  return useQuery({
+    queryKey: queryKeys.circles.rounds(circleId),
+    queryFn: async () => {
+      const response = await get<ApiResponse<{ rounds: CircleRound[] }>>(`/circles/${circleId}/rounds`);
+      return response.data?.rounds ?? [];
+    },
+    enabled: !!circleId,
   });
 }
 
@@ -128,15 +170,16 @@ export function useStartCircle() {
     mutationFn: (circleId: string) =>
       post<ApiResponse<{ success: boolean }>>(`/circles/${circleId}/start`),
     onSuccess: (_data, circleId) => {
-      queryClient.invalidateQueries({ queryKey: ["circle", circleId] });
-      queryClient.invalidateQueries({ queryKey: ["circles"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.circles.detail(circleId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.circles.all });
     },
     onError: (err) => {
-      console.error("[useStartCircle] Failed to start circle:", err);
+      logger.error("[useStartCircle] Failed to start circle:", err);
       addToast({
         type: "error",
         title: "Failed to start circle",
         description: extractErrorMessage(err, "Could not start circle. Please try again."),
+        requestId: (err as any).requestId,
       });
     },
   });
@@ -150,14 +193,15 @@ export function useCreateCircle() {
     mutationFn: (payload: CreateCirclePayload) =>
       post<ApiResponse<Circle>>("/circles", payload, { _retry: true } as Record<string, unknown>),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["circles"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.circles.all });
     },
     onError: (err) => {
-      console.error("[useCreateCircle] Failed to create circle:", err);
+      logger.error("[useCreateCircle] Failed to create circle:", err);
       addToast({
         type: "error",
         title: "Failed to create circle",
         description: extractErrorMessage(err, "Could not create circle. Please try again."),
+        requestId: (err as any).requestId,
       });
     },
   });
@@ -176,149 +220,83 @@ export function useJoinCircle() {
       payload?: JoinCirclePayload;
     }) => post<ApiResponse<CircleMember>>(`/circles/${circleId}/join`, payload ?? {}),
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["circle", variables.circleId] });
-      queryClient.invalidateQueries({ queryKey: ["circle-members", variables.circleId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.circles.detail(variables.circleId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.circles.members(variables.circleId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.circles.all });
     },
     onError: (err) => {
-      console.error("[useJoinCircle] Failed to join circle:", err);
+      logger.error("[useJoinCircle] Failed to join circle:", err);
       addToast({
         type: "error",
         title: "Failed to join circle",
         description: extractErrorMessage(err, "Could not join circle. Please try again."),
+        requestId: (err as any).requestId,
       });
     },
   });
 }
 
 export function useContribute(circleId: string) {
-  const queryClient = useQueryClient();
   const addToast = useUIStore((s) => s.addToast);
 
-  return useMutation({
-    mutationFn: (payload: ContributePayload) =>
-      post<ApiResponse<Contribution>>(
+  return useOptimisticMutation<ContributePayload, Contribution>({
+    mutationFn: async (payload) => {
+      const response = await post<ApiResponse<Contribution>>(
         `/circles/${circleId}/contribute`,
-        payload
-      ),
-    onMutate: async (newContribution) => {
-      // Cancel any outgoing refetches so they do not overwrite the optimistic update.
-      await queryClient.cancelQueries({ queryKey: ["circle", circleId] });
-      await queryClient.cancelQueries({ queryKey: ["circle-rounds", circleId] });
+        payload,
+      );
+      return response.data as Contribution;
+    },
+    queryKeys: [
+      queryKeys.circles.detail(circleId),
+      queryKeys.circles.rounds(circleId),
+      ["contributions", circleId],
+    ],
+    dedupeKey: (vars) => `contribute-${circleId}-${vars.roundNumber ?? "current"}-${vars.amount}`,
+    applyOptimistic: (variables, tempId, qc) => {
+      const circleKey = queryKeys.circles.detail(circleId);
+      const roundsKey = queryKeys.circles.rounds(circleId);
 
-      // Snapshot the current cache values so we can roll back on error.
-      const previousCircle = queryClient.getQueryData<Circle | null>(["circle", circleId]);
-      const previousRounds = queryClient.getQueryData<Contribution[]>(["circle-rounds", circleId]);
-
-      // ── Stable temp id ────────────────────────────────────────────────────
-      // Using crypto.randomUUID() (or a predictable prefix+timestamp fallback)
-      // gives a stable id for the lifetime of this mutation, unlike the raw
-      // `Date.now()` value which could collide under rapid firing.
-      const tempId =
-        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-          ? `optimistic-${crypto.randomUUID()}`
-          : `optimistic-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-      // ── Optimistic circle update ──────────────────────────────────────────
-      if (previousCircle) {
-        queryClient.setQueryData<Circle | null>(["circle", circleId], (old) => {
-          if (!old) return old;
-          return {
-            ...old,
-            totalContributions: (old.totalContributions ?? 0) + (newContribution.amount ?? 0),
-          };
+      const currentCircle = qc.getQueryData<Circle>(circleKey);
+      if (currentCircle) {
+        qc.setQueryData<Circle>(circleKey, {
+          ...currentCircle,
+          totalContributions: (currentCircle.totalContributions ?? 0) + variables.amount,
         });
       }
 
-      // ── Optimistic rounds update ──────────────────────────────────────────
-      // Use a clearly synthetic sentinel so optimistic rows are never confused
-      // with server-confirmed rows.  The real userId is set once the server
-      // responds and the query is invalidated/refetched.
-      const optimisticUserId = "optimistic-pending";
-
-      if (previousRounds) {
-        const optimisticRound: Contribution = {
-          id: tempId,
-          circleId,
-          userId: optimisticUserId,
-          roundNumber: newContribution.roundNumber ?? previousCircle?.currentRound ?? 1,
-          amount: newContribution.amount,
-          status: "pending",
-          onTime: true,
-          createdAt: new Date().toISOString(),
-        };
-        queryClient.setQueryData<Contribution[]>(
-          ["circle-rounds", circleId],
-          (old) => [...(old ?? []), optimisticRound],
-        );
-      }
-
-      // Return snapshot context for rollback.
-      return { previousCircle, previousRounds };
+      const currentRounds =
+        qc.getQueryData<Array<CircleRound | OptimisticRoundRow>>(roundsKey) ?? [];
+      const newRound: OptimisticRoundRow = {
+        id: tempId,
+        circleId,
+        userId: OPTIMISTIC_PENDING_USER_ID,
+        roundNumber: variables.roundNumber ?? currentCircle?.currentRound ?? 1,
+        amount: variables.amount,
+        status: "pending",
+        onTime: true,
+        submittedAt: new Date().toISOString(),
+      };
+      qc.setQueryData<Array<CircleRound | OptimisticRoundRow>>(roundsKey, [
+        ...currentRounds,
+        newRound,
+      ]);
     },
-    onError: (err, _newContribution, context) => {
-      // ── Reliable rollback ─────────────────────────────────────────────────
-      // Restore regardless of whether snapshot values are non-null.  An
-      // undefined context means onMutate never ran (e.g. synchronous throw
-      // before any await), so we just invalidate to force a fresh fetch.
-      if (context) {
-        queryClient.setQueryData(["circle", circleId], context.previousCircle ?? null);
-        queryClient.setQueryData(["circle-rounds", circleId], context.previousRounds ?? []);
-      } else {
-        // Fallback: force a refetch so the UI is not stuck on stale data.
-        queryClient.invalidateQueries({ queryKey: ["circle", circleId] });
-        queryClient.invalidateQueries({ queryKey: ["circle-rounds", circleId] });
-      }
-
-      console.error("[useContribute] Failed to contribute:", err);
+    onSuccess: () => {
       addToast({
-        type: "error",
-        title: "Failed to contribute",
-        description: extractErrorMessage(err, "Could not submit contribution. Please try again."),
+        type: "success",
+        title: "Contribution successful",
+        description: "Your contribution has been recorded.",
       });
     },
-    onSuccess: (_data, _variables, _context) => {
-      // ── Single invalidation path ──────────────────────────────────────────
-      // Invalidate only on success so the server response replaces the
-      // optimistic entry.  onSettled previously ran invalidations on BOTH
-      // success and error paths, causing a double-invalidation on success
-      // (onSuccess would have been added later) and masking rollbacks on error.
-      queryClient.invalidateQueries({ queryKey: ["circle", circleId] });
-      queryClient.invalidateQueries({ queryKey: ["circle-rounds", circleId] });
+    onError: (err) => {
+      logger.error("[useContribute] Failed to contribute:", err);
+      addToast({
+        type: "error",
+        title: "Contribution failed",
+        description: extractErrorMessage(err, "Could not record contribution. Please try again."),
+        requestId: (err as any).requestId,
+      });
     },
-    // onSettled intentionally omitted: invalidation is handled exclusively in
-    // onSuccess above and rollback + toast in onError, so there is no shared
-    // teardown logic that needs to run unconditionally.
-  });
-}
-
-export function useCircleMembers(circleId: string) {
-  return useQuery({
-    queryKey: ["circle-members", circleId],
-    queryFn: async () => {
-      const response = await get<ApiResponse<{ members: CircleMember[] }>>(
-        `/circles/${circleId}/members`
-      );
-      return response.data?.members ?? [];
-    },
-    enabled: !!circleId,
-  });
-}
-
-export function useCircleRounds(circleId: string) {
-  return useQuery({
-    queryKey: ["circle-rounds", circleId],
-    queryFn: async () => {
-      const response = await get<
-        ApiResponse<{
-          rounds: CircleRound[]
-          currentRound: number
-          totalMembers: number
-        }>
-      >(
-        `/circles/${circleId}/rounds`
-      );
-      return response.data?.rounds ?? [];
-    },
-    enabled: !!circleId,
   });
 }

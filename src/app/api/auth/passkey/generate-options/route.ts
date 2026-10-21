@@ -1,9 +1,17 @@
+import { logger } from "@/lib/logger"
 import { NextRequest, NextResponse } from "next/server"
 import { generateRegistrationOptions, generateAuthenticationOptions } from "@simplewebauthn/server"
 import { setTempChallenge, getCredential, getRpId } from "@/lib/passkey/store"
 import { requireAuthenticatedUser, checkRateLimit } from "@/lib/passkey/auth-guard"
 
 const RP_NAME = "Moistello"
+
+// #199: Secure random ID generation using crypto.getRandomValues as fallback
+function generateSecureRandomId(): string {
+  const array = new Uint8Array(16)
+  crypto.getRandomValues(array)
+  return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('')
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -22,7 +30,8 @@ export async function POST(req: NextRequest) {
 
     if (mode === "register") {
       const rpID = getRpId()
-      const userID = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15)
+      // #199: Use crypto.getRandomValues for secure fallback instead of Math.random
+      const userID = crypto.randomUUID ? crypto.randomUUID() : generateSecureRandomId()
       const options = await generateRegistrationOptions({
         rpName: RP_NAME,
         rpID,
@@ -72,7 +81,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "invalid_mode" }, { status: 400 })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error("generate-options error:", msg)
+    logger.error("generate-options error:", msg)
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

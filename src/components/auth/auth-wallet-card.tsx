@@ -1,6 +1,6 @@
 "use client"
 
-import { Loader2 } from "lucide-react"
+import { LoaderCircle } from "lucide-react"
 import { cn } from "@/lib/cn"
 
 interface WalletInfo {
@@ -36,7 +36,7 @@ export function AuthWalletCard({
       disabled={disabled || isConnecting || wallet.status !== "detected"}
       className={cn(
         "relative flex flex-col items-center justify-center gap-2 glass rounded-2xl p-4 min-h-[100px] transition-all border",
-        "hover:bg-white/[0.06] focus:outline-none focus:ring-2 focus:ring-aurora-violet/50",
+        "hover:bg-white/[0.06] focus:outline-none focus:ring-2 focus:ring-foreground",
         wallet.status !== "detected" && "opacity-40 pointer-events-none border-white/10",
         wallet.status === "detected" && "border-white/10 hover:border-aurora-violet/40",
         wallet.isRecommended && "border-aurora-violet/20 hover:border-aurora-violet/40",
@@ -46,7 +46,7 @@ export function AuthWalletCard({
     >
       {state === "connecting" && (
         <div className="absolute inset-0 rounded-2xl bg-background/80 flex items-center justify-center z-10">
-          <Loader2 className="h-5 w-5 animate-spin text-aurora-violet" />
+          <LoaderCircle className="h-5 w-5 animate-spin text-aurora-violet" />
         </div>
       )}
 

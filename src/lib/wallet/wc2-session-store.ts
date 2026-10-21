@@ -1,8 +1,10 @@
+import { logger } from "@/lib/logger"
 import type { NetworkType } from "./types"
-import { computeHmacSha256 } from "./hmac"
+import { SESSION_TTL_MS } from "./session-lifecycle"
+import { computeHmacSha256Sync, isHmacKeyReady, withHmacKey } from "./hmac"
 
 const STORAGE_KEY = "moistello_wc2_session"
-const SESSION_TTL = 7 * 24 * 60 * 60 * 1000
+const SESSION_TTL = SESSION_TTL_MS
 
 interface WC2SessionData {
   pairingTopic: string
@@ -19,7 +21,7 @@ interface StoredPayload {
 
 function computeHMAC(data: WC2SessionData): string {
   const input = `${data.pairingTopic}|${data.publicKey}|${data.network}|${data.createdAt}|${data.expiresAt}`
-  return computeHmacSha256(input)
+  return computeHmacSha256Sync(input)
 }
 
 function isBrowser(): boolean {
@@ -35,6 +37,10 @@ export class WC2SessionStore {
   getSession(): WC2SessionData | null {
     const storage = this._getStorage()
     if (!storage) return null
+
+    // If the HMAC key is not loaded yet we cannot verify the payload. Defer
+    // (return null) instead of treating it as tampered and clearing it.
+    if (!isHmacKeyReady()) return null
 
     try {
       const raw = storage.getItem(STORAGE_KEY)
@@ -56,7 +62,7 @@ export class WC2SessionStore {
 
       return payload.data
     } catch (e) {
-      console.warn("[wc-session-store] Failed to read session, clearing:", e)
+      logger.warn("[wc-session-store] Failed to read session, clearing:", e)
       this.clear()
       return null
     }
@@ -66,20 +72,24 @@ export class WC2SessionStore {
     const storage = this._getStorage()
     if (!storage) return
 
-    try {
-      const payload: StoredPayload = {
-        data: {
-          ...data,
-          createdAt: data.createdAt || Date.now(),
-          expiresAt: data.expiresAt || Date.now() + SESSION_TTL,
-        },
-        hmac: "",
+    // Defer the write until the HMAC key is ready — saving with an empty key
+    // would silently break tamper detection for this session.
+    withHmacKey(() => {
+      try {
+        const payload: StoredPayload = {
+          data: {
+            ...data,
+            createdAt: data.createdAt || Date.now(),
+            expiresAt: data.expiresAt || Date.now() + SESSION_TTL,
+          },
+          hmac: "",
+        }
+        payload.hmac = computeHMAC(payload.data)
+        storage.setItem(STORAGE_KEY, JSON.stringify(payload))
+      } catch {
+        logger.warn("[WC2SessionStore] Failed to save session")
       }
-      payload.hmac = computeHMAC(payload.data)
-      storage.setItem(STORAGE_KEY, JSON.stringify(payload))
-    } catch {
-      console.warn("[WC2SessionStore] Failed to save session")
-    }
+    })
   }
 
   clear(): void {
@@ -88,7 +98,7 @@ export class WC2SessionStore {
     try {
       storage.removeItem(STORAGE_KEY)
     } catch (e) {
-      console.warn("[wc-session-store] Failed to clear session:", e)
+      logger.warn("[wc-session-store] Failed to clear session:", e)
     }
   }
 }

@@ -2,16 +2,17 @@
 
 import React, { useMemo } from "react"
 import { useParams } from "next/navigation"
-import Link from "next/link"
-import { ArrowLeft, Clock, Inbox, CheckCircle, Circle } from "lucide-react"
+import { ArrowLeft, Clock, Inbox, CircleCheck, Circle } from "lucide-react"
 import { useCircle, useCircleRounds } from "@/hooks/use-circles"
 import { PageHeader } from "@/components/shared/page-header"
 import { EmptyState } from "@/components/shared/empty-state"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { ButtonLink } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/cn"
-import { formatCurrency } from "@/lib/formatters"
+import { formatCurrency, formatDateLocalized } from "@/lib/formatters"
+import { useIntl } from "@/hooks/use-intl"
+import { ScheduleAdjustmentWrapper } from "./components/ScheduleAdjustment"
 
 function getNextDate(frequency: string, from: Date): Date {
   const d = new Date(from)
@@ -27,6 +28,7 @@ function getNextDate(frequency: string, from: Date): Date {
 export default function SchedulePage() {
   const params = useParams()
   const circleId = params.id as string
+  const { locale } = useIntl()
 
   const { data: circle, isLoading: cLoading } = useCircle(circleId)
   const { data: rounds = [], isLoading: rLoading } = useCircleRounds(circleId)
@@ -78,7 +80,7 @@ export default function SchedulePage() {
         title="Schedule"
         description={`${schedule.length} rounds · ${circle.frequency}`}
         breadcrumbs={[{ label: "Circles", href: "/circles" }, { label: circle.name, href: `/circles/${circleId}` }, { label: "Schedule" }]}
-        action={<Link href={`/circles/${circleId}`}><Button variant="ghost" size="sm" leftIcon={<ArrowLeft className="h-4 w-4" />}>Back</Button></Link>}
+        action={<ButtonLink href={`/circles/${circleId}`}  variant="ghost" size="sm" leftIcon={<ArrowLeft className="h-4 w-4" />}>Back</ButtonLink>}
       />
 
       {nextRound && (
@@ -87,7 +89,7 @@ export default function SchedulePage() {
             <div>
               <p className="text-2xs text-muted-foreground font-heading tracking-wider uppercase">Next Round</p>
               <p className="text-xl font-bold font-heading gradient-text mt-1">Round {nextRound.round}</p>
-              <p className="text-sm text-muted-foreground mt-1">{nextRound.date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p>
+              <p className="text-sm text-muted-foreground mt-1">{formatDateLocalized(nextRound.date, locale, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p>
             </div>
             <div className="text-right">
               <p className="text-2xl font-bold font-heading gradient-text">{formatCurrency(nextRound.amount, circle.currency)}</p>
@@ -110,7 +112,7 @@ export default function SchedulePage() {
           >
             <div className="flex items-center gap-3">
               {s.isPast ? (
-                <CheckCircle className="h-5 w-5 text-emerald-400 shrink-0" />
+                <CircleCheck className="h-5 w-5 text-emerald-400 shrink-0" />
               ) : s.isCurrent ? (
                 <Clock className="h-5 w-5 text-amber-400 shrink-0 animate-pulse" />
               ) : (
@@ -120,7 +122,7 @@ export default function SchedulePage() {
                 <p className={cn("text-sm font-heading font-semibold", s.isCurrent ? "text-foreground dark:text-white" : "text-muted-foreground")}>
                   Round {s.round}
                 </p>
-                <p className="text-xs text-muted-foreground">{s.date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</p>
+                <p className="text-xs text-muted-foreground">{formatDateLocalized(s.date, locale, { month: "short", day: "numeric", year: "numeric" })}</p>
               </div>
             </div>
             <div className="text-right">
@@ -130,6 +132,8 @@ export default function SchedulePage() {
           </div>
         ))}
       </div>
+
+      <ScheduleAdjustmentWrapper circleId={circleId} />
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import { logger } from "@/lib/logger"
 import axios, {
   AxiosError,
   AxiosRequestConfig,
@@ -5,17 +6,12 @@ import axios, {
   InternalAxiosRequestConfig,
 } from "axios"
 import { API_BASE_URL } from "./constants"
+import { getCsrfHeaders, getCsrfToken } from "./auth/csrf"
 import {
   clearAccessToken,
   getAccessToken,
   setAccessToken,
 } from "./auth/token-store"
-
-function getCsrfToken(): string {
-  if (typeof document === "undefined") return ""
-  const meta = document.querySelector('meta[name="csrf-token"]')
-  return meta?.getAttribute("content") || ""
-}
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -25,7 +21,44 @@ const apiClient = axios.create({
   },
 })
 
+function isSameOriginApiRequest(config: InternalAxiosRequestConfig): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const base = new URL(config.baseURL || API_BASE_URL, window.location.origin);
+    const requestUrl = new URL(config.url || "", base);
+    const isApiPath =
+      requestUrl.pathname.startsWith("/api/") || base.pathname.startsWith("/api/");
+    return requestUrl.origin === window.location.origin && isApiPath;
+  } catch {
+    return false;
+  }
+}
+
 let refreshInFlight: Promise<string> | null = null
+
+/**
+* Resets in-memory client auth state and clears any in-flight refresh promise.
+ */
+export function clearApiClientState(): void {
+  refreshInFlight = null
+  clearAccessToken()
+}
+
+/**
+ * Latches the sign-out side effects so a burst of concurrent 401s produces one
+ * sign-out rather than one per request.
+ *
+ * Without this, a page that fires six requests at once and has an expired token
+ * issues six `DELETE /api/auth/session` round trips, dispatches six
+ * `auth:required` events, and attempts six navigations. It does not loop — the
+ * `_retry` marker bounds each request to one attempt — but it is enough
+ * duplicate work to fill the network panel during exactly the moment a user is
+ * being signed out.
+ *
+ * Deliberately never reset: the tab is navigating to /login, and if the user
+ * does come back the module is re-initialised on the next full page load.
+ */
+let signOutInFlight = false
 
 /**
  * Mints a new access token.
@@ -40,16 +73,22 @@ async function refreshAccessToken(): Promise<string> {
     return refreshInFlight
   }
 
+  const initialToken = getAccessToken()
+
   refreshInFlight = (async () => {
     try {
-      const response = await axios.post("/api/auth/refresh")
+      const response = await axios.post("/api/auth/refresh", undefined, {
+        headers: getCsrfHeaders(),
+      })
 
       const newToken = response.data?.token
       if (!newToken) {
         throw new Error("No token in refresh response")
       }
 
-      setAccessToken(newToken)
+      if (getAccessToken() === initialToken || getAccessToken() === null) {
+        setAccessToken(newToken)
+      }
       return newToken
     } finally {
       refreshInFlight = null
@@ -59,6 +98,7 @@ async function refreshAccessToken(): Promise<string> {
   return refreshInFlight
 }
 
+
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     const token = getAccessToken()
@@ -67,7 +107,11 @@ apiClient.interceptors.request.use(
     }
 
     const method = config.method?.toLowerCase()
-    if (method && ["post", "put", "patch", "delete"].includes(method)) {
+    if (
+      method &&
+      ["post", "put", "patch", "delete"].includes(method) &&
+      isSameOriginApiRequest(config)
+    ) {
       const csrfToken = getCsrfToken()
       if (csrfToken) {
         config.headers["X-CSRF-Token"] = csrfToken
@@ -96,27 +140,32 @@ apiClient.interceptors.response.use(
         originalRequest.headers.Authorization = `Bearer ${newToken}`
         return apiClient(originalRequest)
       } catch (refreshError) {
-        if (typeof window !== "undefined") {
+        if (typeof window !== "undefined" && !signOutInFlight) {
+          signOutInFlight = true
           clearAccessToken()
           // The session cookies are HttpOnly, so only the server can drop
           // them. Wait for that before leaving, otherwise the middleware may
           // still see a stale cookie and bounce us straight back in.
           try {
-            await axios.delete("/api/auth/session")
+            await axios.delete("/api/auth/session", { headers: getCsrfHeaders() })
           } catch (e) {
-            console.warn("[api] Failed to clear session on refresh failure:", e)
+            logger.warn("[api] Failed to clear session on refresh failure:", e)
           }
+          window.dispatchEvent(new CustomEvent("auth:required"))
           window.location.href = "/login"
         }
         return Promise.reject(refreshError)
       }
     }
 
-    if (typeof console !== "undefined") {
-      const message = getErrorMessage(error)
-      if (error.response?.status) {
-        console.error(`[API ${error.response.status}] ${message}`)
-      }
+    if (error.response?.status) {
+      logger.error("API request failed", { status: error.response.status })
+    }
+
+    // Attach request ID from response headers to error for display in toasts
+    const requestId = error.response?.headers?.['x-request-id'] as string | undefined
+    if (requestId) {
+      ;(error as any).requestId = requestId
     }
 
     return Promise.reject(error)

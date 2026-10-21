@@ -1,10 +1,12 @@
 "use client";
 
+import { memo, useMemo } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, PiggyBank, CircleDot, Users, User } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Routes } from "@/lib/constants";
+import { isRouteActive } from "@/lib/navigation";
 import { useTranslate } from "@/lib/locale/context";
 
 interface MobileNavItem {
@@ -13,27 +15,30 @@ interface MobileNavItem {
   icon: React.ReactNode;
 }
 
-export function MobileNav() {
+function MobileNavComponent() {
   const pathname = usePathname();
   const { t } = useTranslate();
 
-  const navItems: MobileNavItem[] = [
+  const navItems: MobileNavItem[] = useMemo(() => [
     { label: t("nav.dashboard"), href: Routes.DASHBOARD, icon: <LayoutDashboard className="h-5 w-5" /> },
     { label: t("nav.savings"), href: Routes.SAVINGS, icon: <PiggyBank className="h-5 w-5" /> },
     { label: t("nav.circles"), href: Routes.CIRCLES, icon: <CircleDot className="h-5 w-5" /> },
     { label: t("nav.communities"), href: Routes.COMMUNITIES, icon: <Users className="h-5 w-5" /> },
     { label: t("nav.profile"), href: Routes.PROFILE, icon: <User className="h-5 w-5" /> },
-  ];
+  ], [t]);
 
-  const isActive = (href: string) => {
-    if (href === Routes.DASHBOARD) return pathname === Routes.DASHBOARD;
-    return pathname.startsWith(href);
-  };
+  const isActive = (href: string) => isRouteActive(pathname, href);
 
   return (
     <nav
+      aria-label="Mobile dashboard navigation"
       className={cn(
-        "fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-md",
+        // `bottom-nav-safe` replaces the former hardcoded `bottom-4`: it keeps
+        // the same 1rem lift but adds env(safe-area-inset-bottom), so the pill
+        // clears the iOS home indicator instead of sitting underneath it. The
+        // token is 0px on every other device, so the desktop/tablet rendering
+        // is byte-for-byte what it was.
+        "fixed bottom-nav-safe left-4 right-4 z-50 mx-auto max-w-md",
         "lg:hidden",
       )}
     >
@@ -50,6 +55,7 @@ export function MobileNav() {
             <Link
               key={item.href}
               href={item.href}
+               aria-current={active ? "page" : undefined}
               className={cn(
                 "relative flex flex-col items-center justify-center gap-1",
                 "h-full min-w-[64px] px-4 py-2",
@@ -85,3 +91,5 @@ export function MobileNav() {
     </nav>
   );
 }
+
+export const MobileNav = memo(MobileNavComponent);

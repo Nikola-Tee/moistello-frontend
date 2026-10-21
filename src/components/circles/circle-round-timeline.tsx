@@ -36,13 +36,45 @@ export function CircleRoundTimeline({
     checkScroll();
     const el = scrollRef.current;
     if (!el) return;
+
     el.addEventListener("scroll", checkScroll, { passive: true });
-    window.addEventListener("resize", checkScroll);
+
+    let timeoutId: number | null = null;
+    let frameId: number | null = null;
+
+    const debouncedCheckScroll = () => {
+      if (timeoutId) window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(() => {
+        if (frameId) window.cancelAnimationFrame(frameId);
+        frameId = window.requestAnimationFrame(checkScroll);
+      }, 100);
+    };
+
+    let observer: ResizeObserver | null = null;
+    // Hoisted into a boolean: testing `"ResizeObserver" in window` inline would
+    // narrow `window` to `never` in the fallback branch, even though the
+    // runtime object there is the very same window.
+    const hasResizeObserver =
+      typeof window !== "undefined" && "ResizeObserver" in window;
+    if (hasResizeObserver) {
+      observer = new ResizeObserver(debouncedCheckScroll);
+      observer.observe(el);
+    } else {
+      window.addEventListener("resize", debouncedCheckScroll);
+    }
+
     return () => {
       el.removeEventListener("scroll", checkScroll);
-      window.removeEventListener("resize", checkScroll);
+      if (observer) {
+        observer.disconnect();
+      } else {
+        window.removeEventListener("resize", debouncedCheckScroll);
+      }
+      if (timeoutId) window.clearTimeout(timeoutId);
+      if (frameId) window.cancelAnimationFrame(frameId);
     };
   }, [rounds]);
+
 
   const scroll = (direction: "left" | "right") => {
     const el = scrollRef.current;
